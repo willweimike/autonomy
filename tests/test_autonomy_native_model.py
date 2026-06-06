@@ -6,11 +6,13 @@ from unittest.mock import patch
 
 from autonomy import (
     Action,
+    ConversationMode,
     ModelClientError,
     Observation,
     OpenAICompatibleModel,
     ProcedureSkill,
     ProcedureSkillSummary,
+    TerminationReason,
 )
 from autonomy.models import Goal, GoalStatus, Outcome, RunState, Transition
 
@@ -66,6 +68,73 @@ class AutonomyNativeModelTest(unittest.TestCase):
     def test_candidate_response_requires_valid_shape(self):
         with self.assertRaisesRegex(ModelClientError, "candidates must be an array"):
             self.model._parse_candidates({"candidates": "invalid"})
+
+    def test_classifies_conversation_turn_as_chat(self):
+        with patch.object(
+            self.model,
+            "_complete_json",
+            return_value={
+                "mode": "chat",
+                "task_goal": "",
+                "reason": "greeting",
+            },
+        ):
+            decision = self.model.classify_conversation_turn("", "hello")
+
+        self.assertEqual(decision.mode, ConversationMode.CHAT)
+        self.assertEqual(decision.task_goal, "")
+
+    def test_classifies_conversation_turn_as_task_and_defaults_goal(self):
+        with patch.object(
+            self.model,
+            "_complete_json",
+            return_value={
+                "mode": "task",
+                "task_goal": "",
+                "reason": "project analysis",
+            },
+        ):
+            decision = self.model.classify_conversation_turn("", "分析目前專案架構")
+
+        self.assertEqual(decision.mode, ConversationMode.TASK)
+        self.assertEqual(decision.task_goal, "分析目前專案架構")
+
+    def test_conversation_router_schema_does_not_include_reply(self):
+        schema = self.model._conversation_decision_schema()
+
+        self.assertNotIn("reply", schema["required"])
+        self.assertNotIn("reply", schema["properties"])
+
+    def test_responds_to_chat_with_separate_reply_schema(self):
+        with patch.object(
+            self.model,
+            "_complete_json",
+            return_value={"reply": "今天天氣聽起來不錯。想聊聊，還是要我協助處理任務？"},
+        ):
+            reply = self.model.respond_to_chat("", "今天天氣真好")
+
+        self.assertIn("天氣", reply)
+
+    def test_summarizes_task_result_with_separate_reply_schema(self):
+        result = type(
+            "Result",
+            (),
+            {
+                "run_id": "run-1",
+                "goal": "分析專案",
+                "termination": TerminationReason.ACHIEVED,
+                "steps_executed": 2,
+                "reason": "done",
+            },
+        )()
+        with patch.object(
+            self.model,
+            "_complete_json",
+            return_value={"reply": "我已完成專案分析。"},
+        ):
+            reply = self.model.summarize_task_result("", "分析目前專案", result)
+
+        self.assertIn("完成", reply)
 
     def test_candidate_parser_accepts_action_intent_only_and_ignores_governance_fields(self):
         candidates = self.model._parse_candidates(

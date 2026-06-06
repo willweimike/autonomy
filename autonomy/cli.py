@@ -14,6 +14,16 @@ from typing import Callable, TextIO
 from .action_gateway import ActionGateway
 from .agent_loop import AgentLoop
 from .conversation import ConversationLoop
+from .conversation_responder import (
+    ConversationResponder,
+    MissingModelConversationResponder,
+    ModelConversationResponder,
+)
+from .conversation_router import (
+    ConversationRouter,
+    MissingModelConversationRouter,
+    ModelConversationRouter,
+)
 from .model import AutonomyModel, ModelClientError
 from .models import RecipeStatus, jsonable
 from .procedure_skills import ProcedureSkillError, ProcedureSkillLibrary
@@ -82,6 +92,8 @@ class SessionShell:
         input_func: Callable[[str], str] = input,
         output: TextIO = sys.stdout,
         agent_loop_factory: Callable[[Path, Path], AgentLoop] | None = None,
+        router: ConversationRouter | None = None,
+        responder: ConversationResponder | None = None,
     ):
         self.workspace = workspace.resolve()
         self.db_path = db_path
@@ -90,11 +102,16 @@ class SessionShell:
         self.input_func = input_func
         self.output = output
         self.agent_loop_factory = agent_loop_factory or self._build_agent_loop
+        default_router, default_responder = self._build_conversation_components()
+        self.router = router or default_router
+        self.responder = responder or default_responder
         self.conversation = ConversationLoop(
             workspace=self.workspace,
             db_path=self.db_path,
             max_steps=self.max_steps,
             agent_loop_factory=self.agent_loop_factory,
+            router=self.router,
+            responder=self.responder,
         )
 
     def run(self) -> int:
@@ -116,6 +133,16 @@ class SessionShell:
 
     def _build_agent_loop(self, workspace: Path, db_path: Path) -> AgentLoop:
         return build_agent_loop(workspace, db_path, config_dir=self.config_dir)
+
+    def _build_conversation_components(self):
+        try:
+            config_store = ModelConfigStore(self.config_dir)
+            provider = create_provider(config_store.load(), config_store)
+            model = AutonomyModel.from_provider(provider)
+            return ModelConversationRouter(model), ModelConversationResponder(model)
+        except (ProviderConfigurationError, ValueError) as exc:
+            error = ProviderConfigurationError(str(exc))
+            return MissingModelConversationRouter(error), MissingModelConversationResponder(error)
 
     def _print_startup(self) -> None:
         self._write("Autonomy interactive session")

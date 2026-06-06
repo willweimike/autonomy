@@ -14,7 +14,10 @@ through `ActionGateway`, so future loops can propose or initiate action while
 sharing the same governed execution boundary.
 
 ```text
-SessionShell -> ConversationLoop -> AgentLoop -> ActionGateway -> ToolRegistry
+SessionShell -> ConversationLoop -> ConversationRouter
+ConversationRouter -> ChatResponder
+ConversationRouter -> AgentLoop -> ActionGateway -> ToolRegistry
+AgentLoop -> TaskResponder
 autonomy run -> AgentLoop -> ActionGateway -> ToolRegistry
 AgentLoop -> OutcomeEvaluator
 AgentLoop -> LearningLoop -> CuratorDaemon
@@ -63,12 +66,16 @@ python3.13 -m autonomy skills disable SKILL_NAME
 
 ## Interactive Session
 
-`autonomy` starts a terminal session. Natural language input flows through a
-session-level conversation loop before creating a governed run. Each run still
-gets a separate `run_id` and journal, while the conversation session keeps the
-recent transcript and linked run summaries available as context for follow-up
-requests. `autonomy run "goal"` remains available for one-shot tasks and
-automation.
+`autonomy` starts a terminal session. Natural language input first flows
+through a model router that only decides `chat` or `task`. Chat turns then go
+to a separate responder that produces the natural reply without creating a
+`run_id` or executing tools. Clear task requests flow into `AgentLoop`, where
+each run gets a separate `run_id` and journal; a task responder then turns the
+run result into a conversational summary with compact metadata. The
+conversation session keeps the recent transcript and linked run summaries
+available as context for follow-up requests. `autonomy run "goal"` remains
+available for one-shot tasks and automation, and always treats the input as a
+task.
 
 Session commands:
 

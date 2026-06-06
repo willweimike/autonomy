@@ -11,6 +11,8 @@ from autonomy.model import ModelClientError
 from autonomy import (
     ActionRecipe,
     AutonomyStore,
+    ConversationDecision,
+    ConversationMode,
     ConversationResponse,
     ModelConfigStore,
     ModelConfiguration,
@@ -66,6 +68,26 @@ class FakeAgentLoop:
             steps_executed=max_steps,
             reason=f"handled {goal}",
         )
+
+
+class TaskRouter:
+    def route(self, conversation_context, user_input):
+        del conversation_context
+        return ConversationDecision(
+            mode=ConversationMode.TASK,
+            task_goal=user_input,
+            reason="test task",
+        )
+
+
+class TaskResponder:
+    def respond_to_chat(self, conversation_context, user_input):
+        del conversation_context, user_input
+        return "chat reply"
+
+    def summarize_task_result(self, conversation_context, user_input, result):
+        del conversation_context, user_input
+        return f"handled {result.goal}"
 
 
 class AutonomyNativeCliTest(unittest.TestCase):
@@ -192,6 +214,8 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             result = shell.run()
@@ -213,6 +237,8 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda workspace, db_path: fake,
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             result = shell.run()
@@ -261,6 +287,8 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda selected_workspace, db_path: fake,
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             shell.run()
@@ -281,6 +309,8 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             result = shell.run()
@@ -305,6 +335,8 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             result = shell.run()
@@ -357,6 +389,8 @@ requires_tools: [filesystem.read]
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             shell.run()
@@ -406,6 +440,8 @@ requires_tools: [filesystem.read]
                 input_func=lambda prompt: next(inputs),
                 output=output,
                 agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
             )
 
             with patch(

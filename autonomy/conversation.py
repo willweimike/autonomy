@@ -4,7 +4,10 @@ import uuid
 from pathlib import Path
 from typing import Callable, Protocol
 
-from .models import ConversationResponse, ConversationTurn, RunResult
+from .conversation_responder import ConversationResponder
+from .conversation_router import ConversationRouter
+from .models import ConversationMode, ConversationResponse, ConversationTurn, RunResult
+from .providers import ModelClientError, ProviderConfigurationError
 from .store import AutonomyStore
 
 
@@ -34,6 +37,8 @@ class ConversationLoop:
         db_path: Path,
         max_steps: int,
         agent_loop_factory: AgentLoopFactory,
+        router: ConversationRouter,
+        responder: ConversationResponder,
         store: AutonomyStore | None = None,
         session_id: str | None = None,
         recent_turn_limit: int = 6,
@@ -46,6 +51,8 @@ class ConversationLoop:
         self.db_path = db_path
         self.max_steps = max_steps
         self.agent_loop_factory = agent_loop_factory
+        self.router = router
+        self.responder = responder
         self.store = store or AutonomyStore(db_path)
         self.session_id = session_id or uuid.uuid4().hex
         self.recent_turn_limit = recent_turn_limit
@@ -77,9 +84,36 @@ class ConversationLoop:
             )
         )
 
+        decision = self.router.route(conversation_context, goal)
+        if decision.mode == ConversationMode.CHAT:
+            reply = self._safe_chat_reply(conversation_context, goal)
+            assistant_turn_id = uuid.uuid4().hex
+            self.store.record_conversation_turn(
+                ConversationTurn(
+                    id=assistant_turn_id,
+                    session_id=self.session_id,
+                    role="assistant",
+                    content=reply,
+                    metadata={
+                        "mode": decision.mode.value,
+                        "reason": decision.reason,
+                    },
+                )
+            )
+            return ConversationResponse(
+                session_id=self.session_id,
+                user_turn_id=user_turn_id,
+                assistant_turn_id=assistant_turn_id,
+                run_result=None,
+                reply=reply,
+                conversation_context=conversation_context,
+                decision=decision,
+            )
+
+        task_goal = decision.task_goal.strip() or goal
         agent_loop = self.agent_loop_factory(self.workspace, self.db_path)
         result = agent_loop.run(
-            goal,
+            task_goal,
             max_steps=self.max_steps,
             interactive=True,
             interface="chat",
@@ -93,7 +127,12 @@ class ConversationLoop:
         self.store.link_conversation_turn_run(user_turn_id, result.run_id)
         candidate_skills = tuple(self._candidate_skills_for_run(result.run_id))
 
-        reply = self._format_reply(result)
+        reply = self._format_task_reply(
+            result,
+            decision,
+            conversation_context=conversation_context,
+            user_input=goal,
+        )
         assistant_turn_id = uuid.uuid4().hex
         self.store.record_conversation_turn(
             ConversationTurn(
@@ -103,6 +142,8 @@ class ConversationLoop:
                 content=reply,
                 run_id=result.run_id,
                 metadata={
+                    "mode": decision.mode.value,
+                    "conversation_reason": decision.reason,
                     "termination": result.termination.value,
                     "steps_executed": result.steps_executed,
                     "reason": result.reason,
@@ -117,6 +158,7 @@ class ConversationLoop:
             reply=reply,
             conversation_context=conversation_context,
             candidate_skills=candidate_skills,
+            decision=decision,
         )
 
     def _build_context(self) -> str:
@@ -148,13 +190,35 @@ class ConversationLoop:
                     candidates.append(payload)
         return candidates
 
-    @staticmethod
-    def _format_reply(result: RunResult) -> str:
+    def _safe_chat_reply(self, conversation_context: str, user_input: str) -> str:
+        try:
+            return self.responder.respond_to_chat(conversation_context, user_input)
+        except (ModelClientError, ProviderConfigurationError, ValueError) as exc:
+            return f"conversation response error: {exc}"
+
+    def _format_task_reply(
+        self,
+        result: RunResult,
+        decision,
+        *,
+        conversation_context: str,
+        user_input: str,
+    ) -> str:
+        del decision
+        try:
+            summary = self.responder.summarize_task_result(
+                conversation_context,
+                user_input,
+                result,
+            )
+        except (ModelClientError, ProviderConfigurationError, ValueError) as exc:
+            summary = f"task summary response error: {exc}"
         return "\n".join(
             [
+                summary,
+                "",
                 f"run_id: {result.run_id}",
                 f"termination: {result.termination.value}",
                 f"steps: {result.steps_executed}",
-                f"reason: {result.reason}",
             ]
         )

@@ -9,6 +9,8 @@ from .models import (
     Action,
     ActionIntent,
     CandidatePath,
+    ConversationDecision,
+    ConversationMode,
     GoalStatus,
     Observation,
     Outcome,
@@ -20,6 +22,24 @@ from .models import (
 
 
 class CandidateModel(Protocol):
+    def classify_conversation_turn(
+        self,
+        conversation_context: str,
+        user_input: str,
+    ) -> ConversationDecision:
+        ...
+
+    def respond_to_chat(self, conversation_context: str, user_input: str) -> str:
+        ...
+
+    def summarize_task_result(
+        self,
+        conversation_context: str,
+        user_input: str,
+        result,
+    ) -> str:
+        ...
+
     def select_procedure_skills(
         self,
         state: RunState,
@@ -87,6 +107,118 @@ class AutonomyModel:
     @property
     def journal_context(self) -> dict[str, str]:
         return self.provider.journal_context
+
+    def classify_conversation_turn(
+        self,
+        conversation_context: str,
+        user_input: str,
+    ) -> ConversationDecision:
+        payload = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Classify the user's turn for a conversational AI system with autonomous "
+                        "task execution. Use mode=chat for greetings, casual conversation, questions "
+                        "about the system, or requests that can be answered without tools. Use "
+                        "mode=task only when the user clearly asks for project inspection, file "
+                        "reading, search, shell execution, debugging, testing, or multi-step work. "
+                        "Do not generate the assistant reply. Do not execute tools. Return only "
+                        "the requested JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "conversation_context": conversation_context,
+                            "user_input": user_input,
+                        }
+                    ),
+                },
+            ],
+        }
+        raw = self._complete_json(payload, self._conversation_decision_schema())
+        try:
+            mode = ConversationMode(self._require_string(raw, "mode"))
+            task_goal = str(raw.get("task_goal", "")).strip()
+            reason = str(raw.get("reason", "")).strip()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ModelClientError(f"conversation decision response is invalid: {exc}") from exc
+        if mode == ConversationMode.TASK and not task_goal:
+            task_goal = user_input.strip()
+        return ConversationDecision(mode=mode, task_goal=task_goal, reason=reason)
+
+    def respond_to_chat(self, conversation_context: str, user_input: str) -> str:
+        payload = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Autonomy, a conversation-first, skill-aware AI system with an "
+                        "autonomous task loop. Reply naturally to the user's chat turn without "
+                        "executing tools. Match the user's language. Do not use a generic greeting "
+                        "unless the user only greeted you. If the user asks who you are, explain "
+                        "Autonomy's role briefly."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "conversation_context": conversation_context,
+                            "user_input": user_input,
+                        }
+                    ),
+                },
+            ],
+        }
+        raw = self._complete_json(payload, self._conversation_reply_schema())
+        try:
+            return self._require_string(raw, "reply").strip()
+        except (KeyError, TypeError) as exc:
+            raise ModelClientError(f"chat response is invalid: {exc}") from exc
+
+    def summarize_task_result(
+        self,
+        conversation_context: str,
+        user_input: str,
+        result,
+    ) -> str:
+        payload = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Summarize an autonomous task run for the user in a conversational tone. "
+                        "Match the user's language. Do not claim work that is not reflected in the "
+                        "run result. Include a concise natural-language summary; compact run "
+                        "metadata will be appended by the system."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "conversation_context": conversation_context,
+                            "user_input": user_input,
+                            "run_result": {
+                                "run_id": result.run_id,
+                                "goal": result.goal,
+                                "termination": result.termination.value,
+                                "steps_executed": result.steps_executed,
+                                "reason": result.reason,
+                            },
+                        }
+                    ),
+                },
+            ],
+        }
+        raw = self._complete_json(payload, self._conversation_reply_schema())
+        try:
+            return self._require_string(raw, "reply").strip()
+        except (KeyError, TypeError) as exc:
+            raise ModelClientError(f"task summary response is invalid: {exc}") from exc
 
     def select_procedure_skills(
         self,
@@ -392,6 +524,32 @@ class AutonomyModel:
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise TypeError(f"{name} must be an array of strings")
         return tuple(item for item in value if item)
+
+    @staticmethod
+    def _conversation_decision_schema() -> dict:
+        return {
+            "title": "conversation_decision",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["mode", "task_goal", "reason"],
+            "properties": {
+                "mode": {"type": "string", "enum": ["chat", "task"]},
+                "task_goal": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+        }
+
+    @staticmethod
+    def _conversation_reply_schema() -> dict:
+        return {
+            "title": "conversation_reply",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["reply"],
+            "properties": {
+                "reply": {"type": "string"},
+            },
+        }
 
     @staticmethod
     def _skill_selection_schema() -> dict:

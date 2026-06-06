@@ -42,6 +42,11 @@ class GoalStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class ConversationMode(str, Enum):
+    CHAT = "chat"
+    TASK = "task"
+
+
 class LearningProposalType(str, Enum):
     NEW_SKILL = "new_skill"
     PATCH_SKILL = "patch_skill"
@@ -177,6 +182,13 @@ class RunResult:
 
 
 @dataclass(frozen=True)
+class ConversationDecision:
+    mode: ConversationMode
+    task_goal: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class ConversationTurn:
     id: str
     session_id: str
@@ -192,10 +204,11 @@ class ConversationResponse:
     session_id: str
     user_turn_id: str
     assistant_turn_id: str
-    run_result: RunResult
+    run_result: RunResult | None
     reply: str
     conversation_context: str = ""
     candidate_skills: tuple[dict[str, Any], ...] = ()
+    decision: ConversationDecision | None = None
 
 
 @dataclass(frozen=True)

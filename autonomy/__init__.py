@@ -1,10 +1,17 @@
 from .action_gateway import ActionGateway, ActionGatewayResult
 from .agent_loop import AgentLoop
+from .conversation_responder import (
+    MissingModelConversationResponder,
+    ModelConversationResponder,
+)
+from .conversation_router import MissingModelConversationRouter, ModelConversationRouter
 from .models import (
     Action,
     ActionIntent,
     ActionRecipe,
     CandidatePath,
+    ConversationDecision,
+    ConversationMode,
     ConversationResponse,
     ConversationTurn,
     EdgeType,
@@ -54,7 +61,9 @@ __all__ = [
     "AutonomyStore",
     "CandidatePath",
     "CandidateSelector",
+    "ConversationDecision",
     "ConversationLoop",
+    "ConversationMode",
     "ConversationResponse",
     "ConversationTurn",
     "CuratorDaemon",
@@ -66,6 +75,10 @@ __all__ = [
     "LearningProposalType",
     "LearningLoop",
     "ModelAssistedOutcomeEvaluator",
+    "MissingModelConversationRouter",
+    "MissingModelConversationResponder",
+    "ModelConversationRouter",
+    "ModelConversationResponder",
     "Observation",
     "OpenAICompatibleModel",
     "ModelClientError",
