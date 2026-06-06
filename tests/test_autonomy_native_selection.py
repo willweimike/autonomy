@@ -56,7 +56,7 @@ class AutonomyNativeSelectionTest(unittest.TestCase):
 
         self.assertEqual(len(selected), 1)
 
-    def test_penalizes_an_action_already_verified_in_the_run(self):
+    def test_penalizes_an_action_already_successful_in_the_run(self):
         repeated = path("repeated")
 
         selected = CandidateSelector().select(
@@ -68,7 +68,7 @@ class AutonomyNativeSelectionTest(unittest.TestCase):
         self.assertEqual([item.source for item in selected], ["repeated"])
         self.assertEqual(
             repeated.penalty_reasons,
-            ["action already succeeded and was verified in this run"],
+            ["action already succeeded with accepted outcome in this run"],
         )
         self.assertGreater(repeated.score_details["penalty"], 0)
 
@@ -84,7 +84,7 @@ class AutonomyNativeSelectionTest(unittest.TestCase):
         self.assertEqual([item.source for item in selected], ["invalid-arguments"])
         self.assertEqual(invalid.penalty_reasons, ["invalid tool arguments"])
 
-    def test_uses_runtime_risk_instead_of_model_scoring_fields(self):
+    def test_uses_gateway_risk_instead_of_model_scoring_fields(self):
         low = path("low", edge_confidence=0.5, evidence_strength=0.5)
         high = path("high", edge_confidence=0.5, evidence_strength=0.5)
 

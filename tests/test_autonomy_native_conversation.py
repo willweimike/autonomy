@@ -5,7 +5,7 @@ from pathlib import Path
 from autonomy import AutonomyStore, ConversationLoop, RunResult, TerminationReason
 
 
-class RecordingRuntime:
+class RecordingAgentLoop:
     def __init__(self):
         self.calls = []
 
@@ -41,12 +41,12 @@ class ConversationLoopTest(unittest.TestCase):
     def test_first_input_creates_session_turns_and_linked_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = AutonomyStore(Path(tmpdir) / "autonomy.db")
-            runtime = RecordingRuntime()
+            agent_loop = RecordingAgentLoop()
             loop = ConversationLoop(
                 workspace=Path(tmpdir),
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=4,
-                runtime_factory=lambda workspace, db_path: runtime,
+                agent_loop_factory=lambda workspace, db_path: agent_loop,
                 store=store,
                 session_id="session",
             )
@@ -60,22 +60,22 @@ class ConversationLoopTest(unittest.TestCase):
         self.assertEqual(conversation["turns"][0]["run_id"], "run-1")
         self.assertEqual(conversation["turns"][1]["role"], "assistant")
         self.assertEqual(conversation["turns"][1]["run_id"], "run-1")
-        self.assertEqual(runtime.calls[0]["conversation_context"], "")
-        self.assertEqual(runtime.calls[0]["journal_metadata"]["conversation_session_id"], "session")
+        self.assertEqual(agent_loop.calls[0]["conversation_context"], "")
+        self.assertEqual(agent_loop.calls[0]["journal_metadata"]["conversation_session_id"], "session")
         self.assertEqual(
-            runtime.calls[0]["journal_metadata"]["conversation_turn_id"],
+            agent_loop.calls[0]["journal_metadata"]["conversation_turn_id"],
             conversation["turns"][0]["id"],
         )
 
     def test_second_input_passes_recent_turns_as_conversation_context(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = AutonomyStore(Path(tmpdir) / "autonomy.db")
-            runtime = RecordingRuntime()
+            agent_loop = RecordingAgentLoop()
             loop = ConversationLoop(
                 workspace=Path(tmpdir),
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=3,
-                runtime_factory=lambda workspace, db_path: runtime,
+                agent_loop_factory=lambda workspace, db_path: agent_loop,
                 store=store,
                 session_id="session",
             )
@@ -83,10 +83,10 @@ class ConversationLoopTest(unittest.TestCase):
             loop.handle_user_input("inspect repository")
             second = loop.handle_user_input("continue from that")
 
-        self.assertIn("inspect repository", runtime.calls[1]["conversation_context"])
-        self.assertIn("handled inspect repository", runtime.calls[1]["conversation_context"])
-        self.assertEqual(second.conversation_context, runtime.calls[1]["conversation_context"])
-        self.assertEqual(runtime.calls[1]["max_steps"], 3)
+        self.assertIn("inspect repository", agent_loop.calls[1]["conversation_context"])
+        self.assertIn("handled inspect repository", agent_loop.calls[1]["conversation_context"])
+        self.assertEqual(second.conversation_context, agent_loop.calls[1]["conversation_context"])
+        self.assertEqual(agent_loop.calls[1]["max_steps"], 3)
 
     def test_workspace_and_max_steps_updates_affect_later_runs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -95,19 +95,19 @@ class ConversationLoopTest(unittest.TestCase):
             next_workspace.mkdir()
             store = AutonomyStore(root / "autonomy.db")
             calls = []
-            runtimes = []
+            agent_loops = []
 
             def factory(workspace, db_path):
                 calls.append({"workspace": workspace, "db_path": db_path})
-                runtime = RecordingRuntime()
-                runtimes.append(runtime)
-                return runtime
+                agent_loop = RecordingAgentLoop()
+                agent_loops.append(agent_loop)
+                return agent_loop
 
             loop = ConversationLoop(
                 workspace=root,
                 db_path=root / "autonomy.db",
                 max_steps=2,
-                runtime_factory=factory,
+                agent_loop_factory=factory,
                 store=store,
                 session_id="session",
             )
@@ -118,6 +118,6 @@ class ConversationLoopTest(unittest.TestCase):
             conversation = store.inspect_conversation("session")
 
         self.assertEqual(calls[0]["workspace"], next_workspace.resolve())
-        self.assertEqual(runtimes[0].calls[0]["max_steps"], 5)
+        self.assertEqual(agent_loops[0].calls[0]["max_steps"], 5)
         self.assertEqual(response.run_result.steps_executed, 1)
         self.assertEqual(conversation["session"]["workspace"], str(next_workspace.resolve()))

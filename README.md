@@ -1,23 +1,31 @@
 # Autonomy-Native AI System
 
-This project builds an AI system around one governed autonomy loop:
+This project builds an AI system around a skill-aware autonomy loop:
 
 ```text
 goal -> candidates -> scored candidate selection -> execution boundary validation -> one action
-     -> observation -> verification -> learning -> explicit termination
+     -> observation -> outcome evaluation -> agent decision -> learning -> explicit termination
 ```
 
-`AutonomyRuntime` is the core agent runtime and the only component allowed to
-activate actions. The previous Kernel concept has been retired; interactive
-sessions now flow through `ConversationLoop` into `AutonomyRuntime`, while
-one-shot `autonomy run` calls the same runtime directly.
+The previous Kernel and Runtime concepts have been retired. Interactive
+sessions now flow through `ConversationLoop` into `AgentLoop`, while one-shot
+`autonomy run` calls the same loop directly. Actual tool execution is routed
+through `ActionGateway`, so future loops can propose or initiate action while
+sharing the same governed execution boundary.
+
+```text
+SessionShell -> ConversationLoop -> AgentLoop -> ActionGateway -> ToolRegistry
+autonomy run -> AgentLoop -> ActionGateway -> ToolRegistry
+AgentLoop -> OutcomeEvaluator
+AgentLoop -> LearningLoop -> CuratorDaemon
+```
 
 The system separates procedure knowledge, executable experience, and
 situation-level composition:
 
 ```text
 ProcedureSkill -> planning knowledge from SKILL.md
-ActionRecipe   -> verified template that can form one Action
+ActionRecipe   -> successful template that can form one Action
 Situation Graph -> evidence-backed Recipe composition
 ```
 
@@ -127,15 +135,23 @@ purpose optional
 ```
 
 The model does not provide risk, progress, cost, uncertainty, expected effect,
-or verification plan. `AutonomyRuntime` derives executable `Action` metadata
-from the registered `ToolSpec`, validates the execution boundary, and applies
+or outcome judgment. `ActionGateway` derives executable `Action` metadata from
+the registered `ToolSpec`, validates the execution boundary, and applies
 approval before a single tool action can run.
+
+## Outcome Evaluation
+
+Tool execution returns an `Observation`; the agent loop evaluates that observation
+into an `Outcome` with execution status, goal status, reason, evidence, and
+confidence. Deterministic agent-side evidence is authoritative. Model assistance
+is used only to interpret ambiguous successful observations, and it cannot
+override a tool failure.
 
 ## Procedure Skills
 
 Procedure Skills are governed `SKILL.md` documents that teach the model how to
 plan a class of task. They never execute tools, grant permission, bypass
-execution governance, or participate in verification.
+execution governance, or participate in outcome evaluation.
 
 The formal skill loader scans one global store:
 
@@ -154,13 +170,20 @@ Initial global skills can be installed under `~/.autonomy/skills/`:
 - `implementation-status-audit`
 - `read-only-code-review`
 
-An achieved run with at least two verified transitions may generate a candidate
+Every run finishes with a lightweight `LearningLoop` review. Achieved runs
+with at least two successful outcomes may generate a `new_skill` candidate
 under `~/.autonomy/skill-candidates/`. Candidate documents are not scanned or
 used until a user approves them with `autonomy skills approve`. Rejected and
 approved candidates remain as audit artifacts and are hidden from the default
 candidate list.
 
-## Verification
+`CuratorDaemon` runs in the background after each run and uses `SkillCurator`
+to consolidate clear duplicate or subcase Skills. Auto-merge is allowed only
+when required tools and platforms do not expand and the merged target
+`SKILL.md` validates. After a successful merge, the source Skill is deleted
+from the formal store; agent prompts do not retain source lineage.
+
+## Test Verification
 
 ```bash
 python3.13 -m pytest

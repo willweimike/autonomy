@@ -11,6 +11,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Callable, TextIO
 
+from .action_gateway import ActionGateway
+from .agent_loop import AgentLoop
 from .conversation import ConversationLoop
 from .model import AutonomyModel, ModelClientError
 from .models import RecipeStatus, jsonable
@@ -23,11 +25,11 @@ from .providers import (
     create_provider,
 )
 from .recipes import RecipeEngine
-from .runtime import AutonomyRuntime
 from .selection import CandidateSelector
+from .skill_curator import CuratorDaemon, SkillCurator
 from .store import AutonomyStore
 from .tools import ApprovalPolicy, build_local_tool_registry
-from .verification import ModelAssistedVerifier
+from .outcome import ModelAssistedOutcomeEvaluator
 
 
 def default_db_path() -> Path:
@@ -38,26 +40,32 @@ def default_model_config_dir() -> Path:
     return Path.home() / ".autonomy"
 
 
-def build_runtime(
+def build_agent_loop(
     workspace: Path,
     db_path: Path,
     *,
     config_dir: Path | None = None,
-) -> AutonomyRuntime:
+) -> AgentLoop:
     store = AutonomyStore(db_path)
     config_store = ModelConfigStore(config_dir or default_model_config_dir())
     provider = create_provider(config_store.load(), config_store)
     model = AutonomyModel.from_provider(provider)
     procedure_skills = ProcedureSkillLibrary(workspace, store)
-    return AutonomyRuntime(
+    tools = build_local_tool_registry(workspace)
+    action_gateway = ActionGateway(
+        tools=tools,
+        store=store,
+        approval=ApprovalPolicy(),
+    )
+    return AgentLoop(
         model=model,
-        tools=build_local_tool_registry(workspace),
-        verifier=ModelAssistedVerifier(model),
+        action_gateway=action_gateway,
+        outcome_evaluator=ModelAssistedOutcomeEvaluator(model),
         store=store,
         selector=CandidateSelector(beam_width=3),
-        approval=ApprovalPolicy(),
         recipes=RecipeEngine(store),
         procedure_skills=procedure_skills,
+        curator_daemon=CuratorDaemon(SkillCurator(procedure_skills, store)),
     )
 
 
@@ -73,7 +81,7 @@ class SessionShell:
         config_dir: Path | None = None,
         input_func: Callable[[str], str] = input,
         output: TextIO = sys.stdout,
-        runtime_factory: Callable[[Path, Path], AutonomyRuntime] | None = None,
+        agent_loop_factory: Callable[[Path, Path], AgentLoop] | None = None,
     ):
         self.workspace = workspace.resolve()
         self.db_path = db_path
@@ -81,12 +89,12 @@ class SessionShell:
         self.config_dir = config_dir or default_model_config_dir()
         self.input_func = input_func
         self.output = output
-        self.runtime_factory = runtime_factory or self._build_runtime
+        self.agent_loop_factory = agent_loop_factory or self._build_agent_loop
         self.conversation = ConversationLoop(
             workspace=self.workspace,
             db_path=self.db_path,
             max_steps=self.max_steps,
-            runtime_factory=self.runtime_factory,
+            agent_loop_factory=self.agent_loop_factory,
         )
 
     def run(self) -> int:
@@ -106,8 +114,8 @@ class SessionShell:
                 continue
             self._run_goal(line)
 
-    def _build_runtime(self, workspace: Path, db_path: Path) -> AutonomyRuntime:
-        return build_runtime(workspace, db_path, config_dir=self.config_dir)
+    def _build_agent_loop(self, workspace: Path, db_path: Path) -> AgentLoop:
+        return build_agent_loop(workspace, db_path, config_dir=self.config_dir)
 
     def _print_startup(self) -> None:
         self._write("Autonomy interactive session")
@@ -337,6 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("candidate_id")
     disable_skill = skills_sub.add_parser("disable")
     disable_skill.add_argument("skill_name")
+
     return parser
 
 
@@ -593,7 +602,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"skill error: {exc}", file=sys.stderr)
             return 2
     try:
-        runtime = build_runtime(
+        agent_loop = build_agent_loop(
             args.workspace.resolve(),
             args.db,
             config_dir=default_model_config_dir(),
@@ -601,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ProviderConfigurationError, ValueError) as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
-    result = runtime.run(
+    result = agent_loop.run(
         args.goal,
         max_steps=args.max_steps,
         interactive=not args.non_interactive,

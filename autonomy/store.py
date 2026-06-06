@@ -10,6 +10,9 @@ from .models import (
     ActionRecipe,
     ConversationTurn,
     EdgeType,
+    LearningProposal,
+    LearningProposalStatus,
+    LearningProposalType,
     ProcedureSkillSummary,
     RecipeEdge,
     RecipeStatus,
@@ -128,6 +131,26 @@ class AutonomyStore:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
                 );
+                CREATE TABLE IF NOT EXISTS learning_proposals (
+                    proposal_id TEXT PRIMARY KEY,
+                    proposal_type TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS curator_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    source_skill TEXT NOT NULL,
+                    target_skill TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             self._migrate_legacy_skill_tables(conn)
@@ -194,7 +217,7 @@ class AutonomyStore:
                     transition.step,
                     json.dumps(jsonable(transition.action), sort_keys=True),
                     json.dumps(jsonable(transition.observation), sort_keys=True),
-                    json.dumps(jsonable(transition.verification), sort_keys=True),
+                    json.dumps(jsonable(transition.outcome), sort_keys=True),
                 ),
             )
 
@@ -556,6 +579,118 @@ class AutonomyStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def delete_procedure_skill_record(self, name: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM procedure_skills WHERE name = ?", (name,))
+
+    def record_learning_proposal(self, proposal: LearningProposal) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO learning_proposals
+                    (proposal_id, proposal_type, source_run_id, status, reason, confidence, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(proposal_id) DO UPDATE SET
+                    proposal_type=excluded.proposal_type,
+                    source_run_id=excluded.source_run_id,
+                    status=excluded.status,
+                    reason=excluded.reason,
+                    confidence=excluded.confidence,
+                    payload_json=excluded.payload_json,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    proposal.id,
+                    proposal.proposal_type.value,
+                    proposal.source_run_id,
+                    proposal.status.value,
+                    proposal.reason,
+                    proposal.confidence,
+                    json.dumps(jsonable(proposal.payload), sort_keys=True),
+                ),
+            )
+
+    def list_learning_proposals(
+        self,
+        *,
+        status: LearningProposalStatus | None = None,
+    ) -> list[LearningProposal]:
+        sql = "SELECT * FROM learning_proposals"
+        params: list[Any] = []
+        if status is not None:
+            sql += " WHERE status = ?"
+            params.append(status.value)
+        sql += " ORDER BY created_at, proposal_id"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            LearningProposal(
+                id=row["proposal_id"],
+                proposal_type=LearningProposalType(row["proposal_type"]),
+                source_run_id=row["source_run_id"],
+                status=LearningProposalStatus(row["status"]),
+                reason=row["reason"],
+                confidence=float(row["confidence"]),
+                payload=json.loads(row["payload_json"]),
+            )
+            for row in rows
+        ]
+
+    def set_learning_proposal_status(
+        self,
+        proposal_id: str,
+        status: LearningProposalStatus,
+    ) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE learning_proposals
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE proposal_id = ?
+                """,
+                (status.value, proposal_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"unknown learning proposal: {proposal_id}")
+
+    def record_curator_event(
+        self,
+        event_type: str,
+        *,
+        source_skill: str = "",
+        target_skill: str = "",
+        reason: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO curator_events
+                    (event_type, source_skill, target_skill, reason, payload_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event_type,
+                    source_skill,
+                    target_skill,
+                    reason,
+                    json.dumps(jsonable(payload or {}), sort_keys=True),
+                ),
+            )
+
+    def list_curator_events(self, limit: int | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM curator_events ORDER BY event_id DESC"
+        params: list[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            {**dict(row), "payload": json.loads(row["payload_json"])}
+            for row in rows
+        ]
+
     def successful_action_count(self, fingerprint: str) -> int:
         count = 0
         with self._connect() as conn:
@@ -565,7 +700,7 @@ class AutonomyStore:
         for row in rows:
             action = json.loads(row["action_json"])
             observation = json.loads(row["observation_json"])
-            verification = json.loads(row["verification_json"])
+            outcome = json.loads(row["verification_json"])
             value = json.dumps(
                 {"tool": action["tool"], "arguments": action["arguments"]},
                 sort_keys=True,
@@ -576,7 +711,7 @@ class AutonomyStore:
             if (
                 hashlib.sha256(value.encode("utf-8")).hexdigest() == fingerprint
                 and observation["succeeded"]
-                and verification["verified"]
+                and outcome["execution_ok"]
             ):
                 count += 1
         return count

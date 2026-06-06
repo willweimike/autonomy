@@ -84,12 +84,32 @@ class ProcedureSkillLibrary:
             raise KeyError(f"unknown or unavailable procedure skill: {name}")
         return loaded[0]
 
+    def list_all(self, *, include_disabled: bool = False) -> list[ProcedureSkill]:
+        if not self.skills_dir.is_dir():
+            return []
+        skills: list[ProcedureSkill] = []
+        for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
+            skill = self._read_skill(skill_file, self.skills_dir, "global")
+            summary = self.store.sync_procedure_skill(skill.summary)
+            if include_disabled or summary.enabled:
+                skills.append(
+                    ProcedureSkill(
+                        summary=summary,
+                        body=skill.body,
+                        raw_content=skill.raw_content,
+                    )
+                )
+        return sorted(skills, key=lambda item: item.summary.name)
+
     def write_candidate(
         self,
         draft: ProcedureSkillDraft,
         *,
         source_run_id: str = "",
         source_workspace: str | Path | None = None,
+        proposal_type: str = "new_skill",
+        reason: str = "",
+        confidence: float = 1.0,
     ) -> dict[str, str]:
         content = self.render_draft(draft)
         self._parse_content(content, source="candidate", path=Path("SKILL.md"))
@@ -105,6 +125,9 @@ class ProcedureSkillLibrary:
             "source_workspace": str(
                 Path(source_workspace).resolve() if source_workspace else self.workspace
             ),
+            "proposal_type": proposal_type,
+            "reason": reason,
+            "confidence": str(max(0.0, min(float(confidence), 1.0))),
             "status": "candidate",
             "created_at": self._utc_now(),
             "path": str(target),
@@ -190,6 +213,62 @@ class ProcedureSkillLibrary:
             raise KeyError(f"unknown procedure skill: {name}")
         self.store.set_procedure_skill_enabled(name, False)
 
+    def delete_skill(self, name: str) -> None:
+        skill_dir = self._skill_dir(name)
+        skill_path = skill_dir / "SKILL.md"
+        if not skill_path.is_file():
+            raise KeyError(f"unknown procedure skill: {name}")
+        self._read_skill(skill_path, self.skills_dir, "global")
+        shutil.rmtree(skill_dir)
+        self.store.delete_procedure_skill_record(name)
+
+    def merge_skill(
+        self,
+        source_name: str,
+        target_name: str,
+        merged_content: str,
+    ) -> ProcedureSkill:
+        if source_name == target_name:
+            raise ProcedureSkillError("source and target skill must differ")
+        source_path = self._skill_dir(source_name) / "SKILL.md"
+        target_path = self._skill_dir(target_name) / "SKILL.md"
+        if not source_path.is_file():
+            raise KeyError(f"unknown source procedure skill: {source_name}")
+        if not target_path.is_file():
+            raise KeyError(f"unknown target procedure skill: {target_name}")
+        source = self._read_skill(source_path, self.skills_dir, "global")
+        target = self._read_skill(target_path, self.skills_dir, "global")
+        merged = self._parse_content(
+            merged_content,
+            source="global",
+            path=target_path,
+        )
+        if merged.summary.name != target.summary.name:
+            raise ProcedureSkillError("merged skill name must match target skill")
+        if not set(merged.summary.requires_tools).issubset(set(target.summary.requires_tools)):
+            raise ProcedureSkillError("merged skill must not increase required tools")
+        if target.summary.platforms and not set(merged.summary.platforms).issubset(
+            set(target.summary.platforms)
+        ):
+            raise ProcedureSkillError("merged skill must not expand platforms")
+        del source
+        target_path.write_text(merged.raw_content, encoding="utf-8")
+        approved = self._read_skill(target_path, self.skills_dir, "global")
+        self.store.sync_procedure_skill(approved.summary)
+        self.delete_skill(source_name)
+        return approved
+
+    def merge_skill_preview(self, merged_content: str, target_name: str) -> ProcedureSkill:
+        target_path = self._skill_dir(target_name) / "SKILL.md"
+        merged = self._parse_content(
+            merged_content,
+            source="global",
+            path=target_path,
+        )
+        if merged.summary.name != target_name:
+            raise ProcedureSkillError("merged skill name must match target skill")
+        return merged
+
     @classmethod
     def render_draft(cls, draft: ProcedureSkillDraft) -> str:
         frontmatter = {
@@ -246,6 +325,9 @@ class ProcedureSkillLibrary:
             "name": skill.summary.name,
             "source_run_id": "",
             "source_workspace": str(self.workspace),
+            "proposal_type": "new_skill",
+            "reason": "",
+            "confidence": "1.0",
             "status": "candidate",
             "created_at": "",
             "path": str(source),
@@ -265,6 +347,14 @@ class ProcedureSkillLibrary:
                 self.store.record_event(source_run_id, 0, event_type, metadata)
             except Exception:
                 pass
+
+    def _skill_dir(self, name: str) -> Path:
+        if not self.NAME_RE.fullmatch(name):
+            raise ProcedureSkillError(f"invalid procedure skill name: {name}")
+        skill_dir = (self.skills_dir / name).resolve()
+        if self.skills_dir.resolve() not in skill_dir.parents:
+            raise ProcedureSkillError("skill path escapes skill directory")
+        return skill_dir
 
     @staticmethod
     def _utc_now() -> str:

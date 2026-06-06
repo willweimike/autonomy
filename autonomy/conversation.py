@@ -2,18 +2,30 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from .models import ConversationResponse, ConversationTurn, RunResult
-from .runtime import AutonomyRuntime
 from .store import AutonomyStore
 
 
-RuntimeFactory = Callable[[Path, Path], AutonomyRuntime]
+class AgentLoopRunner(Protocol):
+    def run(
+        self,
+        goal: str,
+        max_steps: int = 12,
+        interactive: bool = True,
+        interface: str = "run",
+        conversation_context: str = "",
+        journal_metadata: dict | None = None,
+    ) -> RunResult:
+        ...
+
+
+AgentLoopFactory = Callable[[Path, Path], AgentLoopRunner]
 
 
 class ConversationLoop:
-    """Session-level conversation continuity above the autonomy runtime."""
+    """Session-level conversation continuity above the task agent loop."""
 
     def __init__(
         self,
@@ -21,7 +33,7 @@ class ConversationLoop:
         workspace: Path,
         db_path: Path,
         max_steps: int,
-        runtime_factory: RuntimeFactory,
+        agent_loop_factory: AgentLoopFactory,
         store: AutonomyStore | None = None,
         session_id: str | None = None,
         recent_turn_limit: int = 6,
@@ -33,7 +45,7 @@ class ConversationLoop:
         self.workspace = workspace.resolve()
         self.db_path = db_path
         self.max_steps = max_steps
-        self.runtime_factory = runtime_factory
+        self.agent_loop_factory = agent_loop_factory
         self.store = store or AutonomyStore(db_path)
         self.session_id = session_id or uuid.uuid4().hex
         self.recent_turn_limit = recent_turn_limit
@@ -65,8 +77,8 @@ class ConversationLoop:
             )
         )
 
-        runtime = self.runtime_factory(self.workspace, self.db_path)
-        result = runtime.run(
+        agent_loop = self.agent_loop_factory(self.workspace, self.db_path)
+        result = agent_loop.run(
             goal,
             max_steps=self.max_steps,
             interactive=True,

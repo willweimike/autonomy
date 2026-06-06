@@ -5,14 +5,17 @@ from pathlib import Path
 import autonomy
 from autonomy import (
     Action,
+    ActionGateway,
     ActionIntent,
+    AgentLoop,
     ApprovalPolicy,
-    AutonomyRuntime,
     AutonomyStore,
     CandidatePath,
     CandidateSelector,
-    DeterministicVerifier,
+    DeterministicOutcomeEvaluator,
+    GoalStatus,
     Observation,
+    Outcome,
     ProcedureSkillDraft,
     ProcedureSkillLibrary,
     RiskLevel,
@@ -20,7 +23,7 @@ from autonomy import (
     ToolRegistry,
     build_local_tool_registry,
 )
-from autonomy.verification import ModelAssistedVerifier
+from autonomy.outcome import ModelAssistedOutcomeEvaluator
 
 
 class SequenceModel:
@@ -43,7 +46,7 @@ class SequenceModel:
         return ProcedureSkillDraft(
             name="learned-procedure",
             description="A learned procedure.",
-            body="# Learned\n\nFollow the verified steps.",
+            body="# Learned\n\nFollow the successful steps.",
             requires_tools=("test.tool",),
         )
 
@@ -72,10 +75,13 @@ def candidate(
     )
 
 
-class AutonomyNativeRuntimeTest(unittest.TestCase):
-    def test_runtime_replaces_kernel_public_api(self):
-        self.assertIn("AutonomyRuntime", autonomy.__all__)
+class AutonomyNativeAgentLoopTest(unittest.TestCase):
+    def test_agent_loop_replaces_runtime_public_api(self):
+        self.assertIn("AgentLoop", autonomy.__all__)
+        self.assertIn("ActionGateway", autonomy.__all__)
+        self.assertNotIn("AutonomyRuntime", autonomy.__all__)
         self.assertNotIn("AutonomyKernel", autonomy.__all__)
+        self.assertFalse(hasattr(autonomy, "AutonomyRuntime"))
         self.assertFalse(hasattr(autonomy, "AutonomyKernel"))
 
     def setUp(self):
@@ -93,21 +99,32 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def runtime(self, model, approval=None, verifier=None, procedure_skills=None):
-        return AutonomyRuntime(
+    def agent_loop(
+        self,
+        model,
+        approval=None,
+        outcome_evaluator=None,
+        procedure_skills=None,
+        curator_daemon=None,
+    ):
+        return AgentLoop(
             model=model,
-            tools=self.registry,
-            verifier=verifier or DeterministicVerifier(),
+            action_gateway=ActionGateway(
+                tools=self.registry,
+                store=self.store,
+                approval=approval or ApprovalPolicy(),
+            ),
+            outcome_evaluator=outcome_evaluator or DeterministicOutcomeEvaluator(),
             store=self.store,
             selector=CandidateSelector(beam_width=3),
-            approval=approval or ApprovalPolicy(),
             procedure_skills=procedure_skills,
+            curator_daemon=curator_daemon,
         )
 
-    def test_runtime_executes_only_one_action_per_step_and_achieves_goal(self):
+    def test_agent_loop_executes_only_one_action_per_step_and_achieves_goal(self):
         model = SequenceModel([[candidate()], [candidate(goal_achieving=True)]])
 
-        result = self.runtime(model).run("collect evidence", max_steps=5, interactive=False)
+        result = self.agent_loop(model).run("collect evidence", max_steps=5, interactive=False)
 
         self.assertEqual(result.termination, TerminationReason.ACHIEVED)
         self.assertEqual(result.steps_executed, 2)
@@ -116,9 +133,9 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         event_types = [event["event_type"] for event in journal["events"]]
         self.assertEqual(event_types.count("action_selected"), 2)
         self.assertEqual(event_types.count("observation"), 2)
-        self.assertEqual(event_types.count("verification"), 2)
+        self.assertEqual(event_types.count("outcome_evaluated"), 2)
 
-    def test_runtime_journals_non_secret_model_provider_context(self):
+    def test_agent_loop_journals_non_secret_model_provider_context(self):
         model = SequenceModel([[candidate(goal_achieving=True)]])
         model.journal_context = {
             "model_provider": "ollama",
@@ -127,7 +144,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
             "configuration_source": "global",
         }
 
-        result = self.runtime(model).run("collect evidence", interactive=False)
+        result = self.agent_loop(model).run("collect evidence", interactive=False)
 
         started = self.store.inspect_run(result.run_id)["events"][0]["payload"]
         self.assertEqual(started["model_provider"], "ollama")
@@ -135,15 +152,31 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         self.assertEqual(started["interface"], "run")
         self.assertNotIn("api_key", started)
 
-    def test_runtime_journals_chat_interface(self):
+    def test_agent_loop_journals_chat_interface(self):
         model = SequenceModel([[candidate(goal_achieving=True)]])
 
-        result = self.runtime(model).run("collect evidence", interactive=False, interface="chat")
+        result = self.agent_loop(model).run("collect evidence", interactive=False, interface="chat")
 
         started = self.store.inspect_run(result.run_id)["events"][0]["payload"]
         self.assertEqual(started["interface"], "chat")
 
-    def test_runtime_accepts_conversation_context_and_journal_metadata(self):
+    def test_agent_loop_triggers_curator_daemon_after_run_finish(self):
+        class FakeCuratorDaemon:
+            def __init__(self):
+                self.run_ids = []
+
+            def trigger_after_run(self, run_id):
+                self.run_ids.append(run_id)
+
+        daemon = FakeCuratorDaemon()
+        result = self.agent_loop(
+            SequenceModel([[candidate(goal_achieving=True)]]),
+            curator_daemon=daemon,
+        ).run("collect evidence", interactive=False)
+
+        self.assertEqual(daemon.run_ids, [result.run_id])
+
+    def test_agent_loop_accepts_conversation_context_and_journal_metadata(self):
         class ContextModel(SequenceModel):
             def __init__(self):
                 super().__init__([[candidate(goal_achieving=True)]])
@@ -155,7 +188,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
 
         model = ContextModel()
 
-        result = self.runtime(model).run(
+        result = self.agent_loop(model).run(
             "continue",
             interactive=False,
             interface="chat",
@@ -171,8 +204,8 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         self.assertEqual(started["conversation_session_id"], "session")
         self.assertEqual(started["conversation_turn_id"], "turn")
 
-    def test_runtime_exposes_explicit_no_candidates_termination(self):
-        result = self.runtime(SequenceModel([[]])).run("nothing available", interactive=False)
+    def test_agent_loop_exposes_explicit_no_candidates_termination(self):
+        result = self.agent_loop(SequenceModel([[]])).run("nothing available", interactive=False)
 
         self.assertEqual(result.termination, TerminationReason.NO_CANDIDATES)
         self.assertEqual(result.steps_executed, 0)
@@ -180,7 +213,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
     def test_extra_model_governance_fields_do_not_drive_scoring(self):
         model = SequenceModel([[candidate(goal_achieving=True)]])
 
-        result = self.runtime(model).run("governed goal", interactive=False)
+        result = self.agent_loop(model).run("governed goal", interactive=False)
 
         self.assertEqual(result.termination, TerminationReason.ACHIEVED)
         self.assertEqual(len(self.executions), 1)
@@ -197,7 +230,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
             "list outside workspace",
         )
 
-        result = self.runtime(model).run("stay inside workspace", interactive=False)
+        result = self.agent_loop(model).run("stay inside workspace", interactive=False)
 
         self.assertEqual(result.termination, TerminationReason.NO_CANDIDATES)
         journal = self.store.inspect_run(result.run_id)
@@ -209,7 +242,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         self.assertIn("path escapes workspace", blocked["payload"][0]["reason"])
         self.assertNotIn("observation", [event["event_type"] for event in journal["events"]])
 
-    def test_runtime_tries_next_ranked_candidate_when_first_fails_execution_boundary(self):
+    def test_action_gateway_tries_next_ranked_candidate_when_first_fails_execution_boundary(self):
         self.registry = build_local_tool_registry(self.tmpdir.name)
         valid_dir = Path(self.tmpdir.name) / "valid"
         valid_dir.mkdir()
@@ -235,7 +268,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
                 )
             ],
         )
-        result = self.runtime(SequenceModel([[invalid, valid]])).run(
+        result = self.agent_loop(SequenceModel([[invalid, valid]])).run(
             "stay inside workspace",
             max_steps=1,
             interactive=False,
@@ -262,13 +295,13 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         )
         model = SequenceModel([[candidate(tool="high.tool")]])
 
-        result = self.runtime(model).run("risky goal", interactive=False)
+        result = self.agent_loop(model).run("risky goal", interactive=False)
 
         self.assertEqual(result.termination, TerminationReason.APPROVAL_DENIED)
         self.assertEqual(self.executions, [])
 
-    def test_runtime_exposes_max_steps_termination(self):
-        result = self.runtime(
+    def test_agent_loop_exposes_max_steps_termination(self):
+        result = self.agent_loop(
             SequenceModel([[candidate(nonce=1)], [candidate(nonce=2)]])
         ).run(
             "keep collecting",
@@ -279,10 +312,10 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         self.assertEqual(result.termination, TerminationReason.MAX_STEPS_REACHED)
         self.assertEqual(result.steps_executed, 2)
 
-    def test_runtime_penalizes_but_does_not_reject_a_verified_action_repeat(self):
+    def test_agent_loop_penalizes_but_does_not_reject_a_successful_action_repeat(self):
         repeated = candidate()
 
-        result = self.runtime(SequenceModel([[repeated]])).run(
+        result = self.agent_loop(SequenceModel([[repeated]])).run(
             "avoid loops",
             max_steps=3,
             interactive=False,
@@ -297,21 +330,21 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         ]
         self.assertTrue(
             any(
-                "action already succeeded and was verified in this run"
+                "action already succeeded with accepted outcome in this run"
                 in event["payload"][0]["reasons"]
                 for event in penalized_events
                 if event["payload"]
             )
         )
 
-    def test_runtime_exposes_blocked_and_failed_terminations(self):
+    def test_agent_loop_exposes_blocked_and_failed_terminations(self):
         def failing_tool(arguments):
             del arguments
             return Observation("", False, error="tool could not proceed")
 
         self.registry = ToolRegistry()
         self.registry.register("test.tool", failing_tool)
-        blocked = self.runtime(SequenceModel([[candidate()]])).run("blocked", interactive=False)
+        blocked = self.agent_loop(SequenceModel([[candidate()]])).run("blocked", interactive=False)
         self.assertEqual(blocked.termination, TerminationReason.BLOCKED)
 
         class BrokenModel:
@@ -319,35 +352,35 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
                 del state, available_tools, procedure_skills
                 raise RuntimeError("model unavailable")
 
-        failed = self.runtime(BrokenModel()).run("failed", interactive=False)
+        failed = self.agent_loop(BrokenModel()).run("failed", interactive=False)
         self.assertEqual(failed.termination, TerminationReason.FAILED)
 
-    def test_model_assisted_verifier_cannot_override_deterministic_failure(self):
+    def test_model_assisted_outcome_evaluator_cannot_override_deterministic_failure(self):
         class OptimisticModel:
             calls = 0
 
-            def verify(self, state, action, observation):
+            def evaluate_outcome(self, state, action, observation):
                 self.calls += 1
-                raise AssertionError("model must not verify failed execution")
+                raise AssertionError("model must not evaluate failed execution")
 
         model = OptimisticModel()
-        verifier = ModelAssistedVerifier(model)
+        evaluator = ModelAssistedOutcomeEvaluator(model)
         intent = candidate().next_action
         action = Action(
             intent.tool,
             intent.arguments,
             intent.purpose,
-            "runtime-derived verification",
+            "agent-derived outcome",
             purpose=intent.purpose,
         )
-        result = verifier.verify(
+        result = evaluator.evaluate(
             state=None,
             action=action,
             observation=Observation(action.id, False, error="exit code 1"),
         )
 
-        self.assertFalse(result.goal_achieved)
-        self.assertFalse(result.continue_allowed)
+        self.assertFalse(result.execution_ok)
+        self.assertEqual(result.goal_status, GoalStatus.BLOCKED)
         self.assertEqual(model.calls, 0)
 
     def test_successful_multi_step_run_creates_candidate_procedure_skill(self):
@@ -357,7 +390,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
             skills_dir=Path(self.tmpdir.name) / "global-skills",
             candidates_dir=Path(self.tmpdir.name) / "global-skill-candidates",
         )
-        result = self.runtime(
+        result = self.agent_loop(
             SequenceModel([[candidate()], [candidate(goal_achieving=True)]]),
             procedure_skills=library,
         ).run("learn procedure", max_steps=3, interactive=False)
@@ -375,7 +408,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
             skills_dir=Path(self.tmpdir.name) / "global-skills",
             candidates_dir=Path(self.tmpdir.name) / "global-skill-candidates",
         )
-        result = self.runtime(
+        result = self.agent_loop(
             SequenceModel([[candidate(goal_achieving=True)]]),
             procedure_skills=library,
         ).run("single step", interactive=False)
@@ -383,7 +416,7 @@ class AutonomyNativeRuntimeTest(unittest.TestCase):
         self.assertEqual(result.termination, TerminationReason.ACHIEVED)
         self.assertEqual(library.list_candidates(), [])
 
-    def test_progressive_disclosure_is_journaled_but_not_given_to_verifier(self):
+    def test_progressive_disclosure_is_journaled_but_not_given_to_outcome_evaluator(self):
         skill_dir = Path(self.tmpdir.name) / "global-skills" / "test-procedure"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
@@ -409,22 +442,23 @@ secret-procedure-body
             candidates_dir=Path(self.tmpdir.name) / "global-skill-candidates",
         )
 
-        class CapturingVerifier:
+        class CapturingOutcomeEvaluator:
             state_text = ""
 
-            def verify(self, state, action, observation):
+            def evaluate(self, state, action, observation):
                 del action, observation
                 self.state_text = repr(state)
-                return DeterministicVerifier().verify(
-                    state,
-                    candidate(goal_achieving=True).next_action,
-                    Observation("", True),
+                return Outcome(
+                    execution_ok=True,
+                    goal_status=GoalStatus.ACHIEVED,
+                    reason="captured",
+                    evidence=("captured",),
                 )
 
-        verifier = CapturingVerifier()
-        result = self.runtime(
+        outcome_evaluator = CapturingOutcomeEvaluator()
+        result = self.agent_loop(
             SequenceModel([[candidate(goal_achieving=True)]]),
-            verifier=verifier,
+            outcome_evaluator=outcome_evaluator,
             procedure_skills=library,
         ).run("use procedure", interactive=False)
 
@@ -432,7 +466,7 @@ secret-procedure-body
         loaded = next(event for event in journal["events"] if event["event_type"] == "skills_loaded")
         self.assertEqual(loaded["payload"][0]["name"], "test-procedure")
         self.assertNotIn("secret-procedure-body", str(loaded["payload"]))
-        self.assertNotIn("secret-procedure-body", verifier.state_text)
+        self.assertNotIn("secret-procedure-body", outcome_evaluator.state_text)
 
 
 if __name__ == "__main__":

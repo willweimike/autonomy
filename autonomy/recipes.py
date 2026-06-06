@@ -14,7 +14,7 @@ from .store import AutonomyStore
 
 
 class RecipeEngine:
-    """Generate executable candidates from verified action recipes and graph paths."""
+    """Generate executable candidates from successful action recipes and graph paths."""
 
     def __init__(self, store: AutonomyStore, candidate_threshold: int = 2):
         self.store = store
@@ -67,9 +67,9 @@ class RecipeEngine:
     def learn(self, transition: Transition) -> ActionRecipe | None:
         self.store.update_recipe_edges(
             transition.action.edge_ids,
-            success=transition.verification.verified and transition.observation.succeeded,
+            success=transition.outcome.execution_ok and transition.observation.succeeded,
         )
-        if not transition.verification.verified or not transition.observation.succeeded:
+        if not transition.outcome.execution_ok or not transition.observation.succeeded:
             return None
         evidence_count = self.store.successful_action_count(transition.action.fingerprint)
         if evidence_count < self.candidate_threshold:
@@ -82,7 +82,7 @@ class RecipeEngine:
             recipe = ActionRecipe(
                 id=recipe_id,
                 intent=transition.action.expected_effect,
-                preconditions="Observed in verified successful transitions.",
+                preconditions="Observed in successful outcomes.",
                 action_template={
                     "tool": transition.action.tool,
                     "arguments": transition.action.arguments,

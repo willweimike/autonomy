@@ -9,12 +9,13 @@ from autonomy import (
     ActionRecipe,
     AutonomyStore,
     EdgeType,
+    GoalStatus,
     Observation,
+    Outcome,
     RecipeEdge,
     RecipeEngine,
     RecipeStatus,
     SituationRecipeNode,
-    Verification,
 )
 from autonomy.models import Goal, RunState, Transition
 
@@ -34,7 +35,7 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
             step=step,
             action=action,
             observation=Observation(action.id, True, output="ok", evidence=("ok",)),
-            verification=Verification(True, False, True, "verified"),
+            outcome=Outcome(True, GoalStatus.CONTINUE, "successful outcome"),
         )
 
     def test_repeated_success_creates_candidate_but_not_active_recipe(self):
@@ -108,7 +109,7 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
             intent.tool,
             intent.arguments,
             intent.purpose,
-            "runtime-derived verification",
+            "agent-derived outcome",
             purpose=intent.purpose,
             recipe_id=intent.recipe_id,
             edge_ids=intent.edge_ids,

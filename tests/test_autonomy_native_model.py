@@ -12,7 +12,7 @@ from autonomy import (
     ProcedureSkill,
     ProcedureSkillSummary,
 )
-from autonomy.models import Goal, RunState, Transition, Verification
+from autonomy.models import Goal, GoalStatus, Outcome, RunState, Transition
 
 
 class Response:
@@ -110,13 +110,13 @@ class AutonomyNativeModelTest(unittest.TestCase):
             with self.assertRaisesRegex(ModelClientError, "chat completion response is invalid"):
                 self.model._complete_json({"messages": []}, self.model._candidate_schema())
 
-    def test_verification_reports_missing_fields(self):
+    def test_outcome_reports_missing_fields(self):
         state = RunState("run", Goal("goal"))
         action = Action("filesystem.read", {"path": "README.md"}, "read", "verify")
         observation = Observation(action.id, True, output="read")
-        with patch.object(self.model, "_complete_json", return_value={"verified": True}):
-            with self.assertRaisesRegex(ModelClientError, "verification response is invalid"):
-                self.model.verify(state=state, action=action, observation=observation)
+        with patch.object(self.model, "_complete_json", return_value={"execution_ok": True}):
+            with self.assertRaisesRegex(ModelClientError, "outcome response is invalid"):
+                self.model.evaluate_outcome(state=state, action=action, observation=observation)
 
     def test_skill_selection_ignores_unknown_names_and_limits_to_three(self):
         index = [
@@ -206,7 +206,7 @@ class AutonomyNativeModelTest(unittest.TestCase):
                 1,
                 action,
                 Observation(action.id, True, output="README.md", evidence=("listed:.",)),
-                Verification(True, False, True, "README exists", progress=0.25),
+                Outcome(True, GoalStatus.CONTINUE, "README exists", confidence=0.25),
             )
         )
         captured = {}
@@ -225,6 +225,7 @@ class AutonomyNativeModelTest(unittest.TestCase):
             {"tool": "filesystem.list", "arguments": {"path": "."}, "purpose": ""},
         )
         self.assertEqual(transition["observation"]["output"], "README.md")
+        self.assertEqual(transition["outcome"]["goal_status"], "continue")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ class FakeProvider:
             raise self.error
 
 
-class FakeRuntime:
+class FakeAgentLoop:
     def __init__(self):
         self.calls = []
 
@@ -69,7 +69,7 @@ class FakeRuntime:
 
 
 class AutonomyNativeCliTest(unittest.TestCase):
-    def test_doctor_reports_runtime_and_tools(self):
+    def test_doctor_reports_agent_loop_and_tools(self):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
@@ -191,7 +191,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 config_dir=Path(tmpdir) / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda workspace, db_path: FakeRuntime(),
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
             )
 
             result = shell.run()
@@ -202,7 +202,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
 
     def test_session_shell_runs_goal_and_summarizes_result(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            fake = FakeRuntime()
+            fake = FakeAgentLoop()
             output = io.StringIO()
             inputs = iter(["inspect repository", "/exit"])
             shell = SessionShell(
@@ -212,7 +212,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 config_dir=Path(tmpdir) / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda workspace, db_path: fake,
+                agent_loop_factory=lambda workspace, db_path: fake,
             )
 
             result = shell.run()
@@ -243,7 +243,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()
-            fake = FakeRuntime()
+            fake = FakeAgentLoop()
             output = io.StringIO()
             inputs = iter(
                 [
@@ -260,7 +260,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 config_dir=Path(tmpdir) / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda selected_workspace, db_path: fake,
+                agent_loop_factory=lambda selected_workspace, db_path: fake,
             )
 
             shell.run()
@@ -280,7 +280,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 config_dir=Path(tmpdir) / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda workspace, db_path: FakeRuntime(),
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
             )
 
             result = shell.run()
@@ -304,7 +304,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
                 config_dir=Path(tmpdir) / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda workspace, db_path: FakeRuntime(),
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
             )
 
             result = shell.run()
@@ -356,7 +356,7 @@ requires_tools: [filesystem.read]
                 config_dir=workspace / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda workspace, db_path: FakeRuntime(),
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
             )
 
             shell.run()
@@ -405,7 +405,7 @@ requires_tools: [filesystem.read]
                 config_dir=Path(tmpdir) / "config",
                 input_func=lambda prompt: next(inputs),
                 output=output,
-                runtime_factory=lambda workspace, db_path: FakeRuntime(),
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
             )
 
             with patch(
@@ -689,6 +689,10 @@ requires_tools: [filesystem.read]
                 )
             self.assertEqual(result, 0)
             self.assertEqual(json.loads(output.getvalue())["status"], "rejected")
+
+    def test_curator_cli_is_not_exposed(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["curator", "status"])
 
 
 if __name__ == "__main__":

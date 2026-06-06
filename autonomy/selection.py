@@ -7,7 +7,7 @@ from .models import ActionIntent, CandidatePath, RiskLevel
 
 
 class CandidateSelector:
-    """Rank candidate paths with penalties, leaving execution checks to the runtime."""
+    """Rank candidate paths with penalties, leaving execution checks to ActionGateway."""
 
     WEIGHTS = {
         "purpose": 0.10,
@@ -20,7 +20,7 @@ class CandidateSelector:
     RISK_SCORE = {RiskLevel.LOW: 0.0, RiskLevel.MEDIUM: 0.5, RiskLevel.HIGH: 1.0}
     PENALTIES = {
         "candidate has no actions": 1000.0,
-        "action already succeeded and was verified in this run": 0.75,
+        "action already succeeded with accepted outcome in this run": 0.75,
         "tool is unavailable": 1.0,
         "invalid tool arguments": 1.0,
     }
@@ -72,7 +72,7 @@ class CandidateSelector:
         if not candidate.actions:
             return ["candidate has no actions"]
         if candidate.next_action.fingerprint in (blocked_action_fingerprints or set()):
-            reasons.append("action already succeeded and was verified in this run")
+            reasons.append("action already succeeded with accepted outcome in this run")
         for action in candidate.actions:
             if action.tool not in available_tools:
                 reasons.append(f"tool is unavailable: {action.tool}")

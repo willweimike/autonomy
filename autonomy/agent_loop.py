@@ -2,52 +2,62 @@ from __future__ import annotations
 
 import uuid
 
+from .action_gateway import ActionGateway
+from .learning import LearningLoop
 from .model import CandidateModel
 from .models import (
-    Action,
-    ActionIntent,
     CandidatePath,
     Goal,
-    Observation,
+    GoalStatus,
+    Outcome,
     ProcedureSkill,
     ProcedureSkillSummary,
-    RiskLevel,
     RunResult,
     RunState,
     TerminationReason,
     Transition,
-    Verification,
 )
+from .outcome import OutcomeEvaluator
 from .procedure_skills import ProcedureSkillLibrary
 from .recipes import RecipeEngine
 from .selection import CandidateSelector
+from .skill_curator import CuratorDaemon
 from .store import AutonomyStore
-from .tools import ApprovalPolicy, ToolRegistry
-from .verification import Verifier
 
 
-class AutonomyRuntime:
-    """Agent runtime and the only component allowed to activate top-level actions."""
+class AgentLoop:
+    """Self-directed task loop. Action execution is delegated to ActionGateway."""
 
     def __init__(
         self,
+        *,
         model: CandidateModel,
-        tools: ToolRegistry,
-        verifier: Verifier,
+        action_gateway: ActionGateway,
+        outcome_evaluator: OutcomeEvaluator,
         store: AutonomyStore,
         selector: CandidateSelector | None = None,
-        approval: ApprovalPolicy | None = None,
         recipes: RecipeEngine | None = None,
         procedure_skills: ProcedureSkillLibrary | None = None,
+        learning_loop: LearningLoop | None = None,
+        curator_daemon: CuratorDaemon | None = None,
     ):
         self.model = model
-        self.tools = tools
-        self.verifier = verifier
+        self.action_gateway = action_gateway
+        self.outcome_evaluator = outcome_evaluator
         self.store = store
         self.selector = selector or CandidateSelector(beam_width=3)
-        self.approval = approval or ApprovalPolicy()
         self.recipes = recipes or RecipeEngine(store)
         self.procedure_skills = procedure_skills
+        self.learning_loop = learning_loop or LearningLoop(
+            model=model,
+            store=store,
+            procedure_skills=procedure_skills,
+        )
+        self.curator_daemon = curator_daemon
+
+    @property
+    def tools(self):
+        return self.action_gateway.tools
 
     def run(
         self,
@@ -128,55 +138,51 @@ class AutonomyRuntime:
                 "no candidates were generated",
             )
 
-        action, blocked = self.choose_executable_action(ranked)
-        if blocked:
-            self.store.record_event(
-                state.run_id,
-                state.step,
-                "execution_candidates_blocked",
-                blocked,
-            )
-        if action is None:
+        gateway_result = self.action_gateway.execute_next(
+            state,
+            ranked,
+            interactive=interactive,
+        )
+        if gateway_result.action is None:
             return self.finish_run(
                 state,
                 TerminationReason.NO_CANDIDATES,
-                "no ranked candidate passed execution boundary validation",
+                gateway_result.approval_reason,
             )
-
-        self.store.record_event(
-            state.run_id,
-            state.step,
-            "action_selected",
-            {
-                "tool": action.tool,
-                "arguments": action.arguments,
-                "purpose": action.purpose,
-                "risk_level": action.risk_level.value,
-                "expected_effect": action.expected_effect,
-                "verification_plan": action.verification_plan,
-                "tool_spec": self.tools.spec(action.tool).summary,
-            },
-        )
-        allowed, approval_reason = self.authorize_action(state, action, interactive=interactive)
-        if not allowed:
+        if not gateway_result.approval_allowed:
             return self.finish_run(
                 state,
                 TerminationReason.APPROVAL_DENIED,
-                approval_reason,
+                gateway_result.approval_reason,
+            )
+        if gateway_result.observation is None:
+            return self.finish_run(
+                state,
+                TerminationReason.FAILED,
+                "action gateway did not return an observation",
             )
 
-        observation = self.execute_action(state, action)
-        verification = self.verify_observation(state, action, observation)
-        transition = Transition(state.run_id, state.step, action, observation, verification)
+        outcome = self.evaluate_outcome(
+            state,
+            gateway_result.action,
+            gateway_result.observation,
+        )
+        transition = Transition(
+            state.run_id,
+            state.step,
+            gateway_result.action,
+            gateway_result.observation,
+            outcome,
+        )
         self.store.record_transition(transition)
         state.transitions.append(transition)
         self.learn_from_transition(state, transition)
-        state.current_state = verification.reason
+        state.current_state = outcome.reason
 
-        if verification.goal_achieved:
-            return self.finish_run(state, TerminationReason.ACHIEVED, verification.reason)
-        if not verification.continue_allowed:
-            return self.finish_run(state, TerminationReason.BLOCKED, verification.reason)
+        if outcome.goal_status == GoalStatus.ACHIEVED:
+            return self.finish_run(state, TerminationReason.ACHIEVED, outcome.reason)
+        if outcome.goal_status == GoalStatus.BLOCKED:
+            return self.finish_run(state, TerminationReason.BLOCKED, outcome.reason)
         return None
 
     def disclose_procedure_skills(self, state: RunState) -> list[ProcedureSkill]:
@@ -242,15 +248,15 @@ class AutonomyRuntime:
         completed_action_fingerprints = {
             transition.action.fingerprint
             for transition in state.transitions
-            if transition.observation.succeeded and transition.verification.verified
+            if transition.observation.succeeded and transition.outcome.execution_ok
         }
         ranked = self.selector.select(
             candidates,
             self.tools.names,
             completed_action_fingerprints,
             self.tools.rejection_reason,
-            self._risk_for_intent,
-            self._side_effects_for_intent,
+            self.action_gateway.risk_for_intent,
+            self.action_gateway.side_effects_for_intent,
         )
         self.store.record_event(
             state.run_id,
@@ -271,90 +277,15 @@ class AutonomyRuntime:
         self.store.record_event(state.run_id, state.step, "candidates_ranked", ranked)
         return ranked
 
-    def choose_executable_action(
-        self,
-        ranked: list[CandidatePath],
-    ) -> tuple[Action | None, list[dict[str, str]]]:
-        blocked: list[dict[str, str]] = []
-        for candidate in ranked:
-            if not candidate.actions:
-                blocked.append(
-                    {
-                        "candidate_id": candidate.id,
-                        "source": candidate.source,
-                        "reason": "candidate has no actions",
-                    }
-                )
-                continue
-            intent = candidate.next_action
-            if intent.tool not in self.tools.names:
-                blocked.append(
-                    {
-                        "candidate_id": candidate.id,
-                        "source": candidate.source,
-                        "reason": f"tool is unavailable: {intent.tool}",
-                    }
-                )
-                continue
-            reason = self.tools.rejection_reason(intent)
-            if reason:
-                blocked.append(
-                    {
-                        "candidate_id": candidate.id,
-                        "source": candidate.source,
-                        "reason": reason,
-                    }
-                )
-                continue
-            action = self.tools.action_from_intent(intent)
-            return action, blocked
-        return None, blocked
-
-    def _risk_for_intent(self, intent: ActionIntent) -> RiskLevel:
-        if intent.tool not in self.tools.names:
-            return RiskLevel.HIGH
-        return self.tools.spec(intent.tool).default_risk
-
-    def _side_effects_for_intent(self, intent: ActionIntent) -> tuple[str, ...]:
-        if intent.tool not in self.tools.names:
-            return ("unknown-tool",)
-        return self.tools.spec(intent.tool).side_effects
-
-    def authorize_action(
+    def evaluate_outcome(
         self,
         state: RunState,
-        action: Action,
-        *,
-        interactive: bool,
-    ) -> tuple[bool, str]:
-        allowed, approval_reason = self.approval.authorize(action, interactive)
-        self.store.record_event(
-            state.run_id,
-            state.step,
-            "approval_decision",
-            {"allowed": allowed, "reason": approval_reason},
-        )
-        return allowed, approval_reason
-
-    def execute_action(self, state: RunState, action: Action) -> Observation:
-        observation = self.tools.execute(action)
-        self.store.record_event(
-            state.run_id,
-            state.step,
-            "observation",
-            observation,
-        )
-        return observation
-
-    def verify_observation(
-        self,
-        state: RunState,
-        action: Action,
-        observation: Observation,
-    ) -> Verification:
-        verification = self.verifier.verify(state, action, observation)
-        self.store.record_event(state.run_id, state.step, "verification", verification)
-        return verification
+        action,
+        observation,
+    ) -> Outcome:
+        outcome = self.outcome_evaluator.evaluate(state, action, observation)
+        self.store.record_event(state.run_id, state.step, "outcome_evaluated", outcome)
+        return outcome
 
     def learn_from_transition(self, state: RunState, transition: Transition) -> None:
         learned = self.recipes.learn(transition)
@@ -372,8 +303,25 @@ class AutonomyRuntime:
         termination: TerminationReason,
         reason: str,
     ) -> RunResult:
-        if termination == TerminationReason.ACHIEVED:
-            self._maybe_create_procedure_skill_candidate(state)
+        try:
+            self.learning_loop.review_run(state, termination=termination, reason=reason)
+        except Exception as exc:
+            self.store.record_event(
+                state.run_id,
+                state.step,
+                "learning_review_error",
+                {"error": str(exc)},
+            )
+        if self.curator_daemon:
+            try:
+                self.curator_daemon.trigger_after_run(state.run_id)
+            except Exception as exc:
+                self.store.record_event(
+                    state.run_id,
+                    state.step,
+                    "curator_daemon_error",
+                    {"error": str(exc)},
+                )
         result = RunResult(
             run_id=state.run_id,
             goal=state.goal.text,
@@ -384,32 +332,3 @@ class AutonomyRuntime:
         self.store.record_event(state.run_id, state.step, "run_finished", result)
         self.store.complete_run(result)
         return result
-
-    def _maybe_create_procedure_skill_candidate(self, state: RunState) -> None:
-        if not self.procedure_skills or len(state.transitions) < 2:
-            return
-        if not all(
-            transition.observation.succeeded and transition.verification.verified
-            for transition in state.transitions
-        ):
-            return
-        try:
-            draft = self.model.draft_procedure_skill(state)
-            candidate = self.procedure_skills.write_candidate(
-                draft,
-                source_run_id=state.run_id,
-                source_workspace=self.procedure_skills.workspace,
-            )
-            self.store.record_event(
-                state.run_id,
-                state.step,
-                "procedure_skill_candidate_created",
-                candidate,
-            )
-        except Exception as exc:
-            self.store.record_event(
-                state.run_id,
-                state.step,
-                "procedure_skill_candidate_error",
-                {"error": str(exc)},
-            )

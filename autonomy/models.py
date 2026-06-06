@@ -36,6 +36,26 @@ class TerminationReason(str, Enum):
     FAILED = "failed"
 
 
+class GoalStatus(str, Enum):
+    CONTINUE = "continue"
+    ACHIEVED = "achieved"
+    BLOCKED = "blocked"
+
+
+class LearningProposalType(str, Enum):
+    NEW_SKILL = "new_skill"
+    PATCH_SKILL = "patch_skill"
+    MERGE_SKILLS = "merge_skills"
+    NO_LEARNING = "no_learning"
+
+
+class LearningProposalStatus(str, Enum):
+    CANDIDATE = "candidate"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    APPLIED = "applied"
+
+
 @dataclass(frozen=True)
 class Goal:
     text: str
@@ -120,13 +140,12 @@ class Observation:
 
 
 @dataclass(frozen=True)
-class Verification:
-    verified: bool
-    goal_achieved: bool
-    continue_allowed: bool
+class Outcome:
+    execution_ok: bool
+    goal_status: GoalStatus
     reason: str
     evidence: tuple[str, ...] = ()
-    progress: float = 0.0
+    confidence: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -135,7 +154,7 @@ class Transition:
     step: int
     action: Action
     observation: Observation
-    verification: Verification
+    outcome: Outcome
 
 
 @dataclass
@@ -247,6 +266,17 @@ class ProcedureSkillDraft:
     platforms: tuple[str, ...] = ("macos", "linux", "windows")
     requires_tools: tuple[str, ...] = ()
     version: str = "0.1.0"
+
+
+@dataclass(frozen=True)
+class LearningProposal:
+    id: str
+    proposal_type: LearningProposalType
+    source_run_id: str
+    reason: str
+    confidence: float
+    payload: dict[str, Any]
+    status: LearningProposalStatus = LearningProposalStatus.CANDIDATE
 
 
 def jsonable(value: Any) -> Any:
