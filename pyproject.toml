@@ -1,0 +1,20 @@
+[project]
+name = "whole-new-agentic-system"
+version = "0.1.0"
+description = "An autonomy-native AI system with a governed observe-decide-act-learn loop."
+requires-python = ">=3.13"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+autonomy = "autonomy.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["autonomy*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
