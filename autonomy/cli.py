@@ -293,6 +293,9 @@ class SessionShell:
                 )
             elif arguments[0] == "candidates" and len(arguments) == 1:
                 self._write(json.dumps(library.list_candidates(), indent=2, sort_keys=True))
+            elif arguments[0] == "install-bundled":
+                installed = library.install_bundled(arguments[1:] or None)
+                self._write(json.dumps(jsonable(installed), indent=2, sort_keys=True))
             elif arguments[0] == "view-candidate" and len(arguments) == 2:
                 self._write(library.view_candidate(arguments[1]).raw_content)
             elif arguments[0] == "approve" and len(arguments) == 2:
@@ -302,7 +305,7 @@ class SessionShell:
                 self._write(json.dumps(library.reject_candidate(arguments[1]), indent=2, sort_keys=True))
             else:
                 self._write(
-                    "usage: /skills [candidates|view-candidate CANDIDATE_ID|approve CANDIDATE_ID|reject CANDIDATE_ID]"
+                    "usage: /skills [candidates|install-bundled [SKILL_NAME...]|view-candidate CANDIDATE_ID|approve CANDIDATE_ID|reject CANDIDATE_ID]"
                 )
         except (KeyError, FileExistsError, ProcedureSkillError, ToolsetConfigurationError) as exc:
             self._write(f"skill error: {exc}")
@@ -311,9 +314,13 @@ class SessionShell:
         store = ToolsetConfigStore(self.tool_config_dir)
         try:
             if not arguments or arguments[0] in {"list", "status"}:
+                registry = build_local_tool_registry(self.workspace)
                 self._write(
                     json.dumps(
-                        toolset_catalog_status(store.load()),
+                        toolset_catalog_status(
+                            store.load(),
+                            registry.tool_statuses(),
+                        ),
                         indent=2,
                         sort_keys=True,
                     )
@@ -415,6 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
     view = skills_sub.add_parser("view")
     view.add_argument("skill_name")
     skills_sub.add_parser("candidates")
+    install_bundled = skills_sub.add_parser("install-bundled")
+    install_bundled.add_argument("skill_names", nargs="*")
     view_candidate = skills_sub.add_parser("view-candidate")
     view_candidate.add_argument("candidate_id")
     approve = skills_sub.add_parser("approve")
@@ -553,10 +562,12 @@ def doctor(
     except ToolsetConfigurationError as exc:
         toolset_configuration = None
         toolset_error = str(exc)
-    registry = build_local_tool_registry(
-        workspace or Path.cwd(),
-        toolset_configuration,
-    ) if toolset_configuration else build_local_tool_registry(workspace or Path.cwd())
+    full_registry = build_local_tool_registry(workspace or Path.cwd())
+    registry = (
+        full_registry.filter_by_toolsets(toolset_configuration)
+        if toolset_configuration
+        else full_registry
+    )
     checks = {
         "python_3_13_or_newer": sys.version_info >= (3, 13),
         "database_writable": database_writable,
@@ -580,7 +591,10 @@ def doctor(
         "tool_config_valid": toolset_configuration is not None,
         "tool_config_error": toolset_error,
         "enabled_toolsets": sorted(toolset_configuration.enabled_toolsets) if toolset_configuration else [],
-        "toolsets": toolset_catalog_status(toolset_configuration) if toolset_configuration else [],
+        "toolsets": toolset_catalog_status(
+            toolset_configuration,
+            full_registry.tool_statuses(),
+        ) if toolset_configuration else [],
         "tools": sorted(registry.names),
     }
     try:
@@ -700,6 +714,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(library.view(args.skill_name, registry.names).raw_content)
             elif args.skills_command == "candidates":
                 print(json.dumps(library.list_candidates(), indent=2, sort_keys=True))
+            elif args.skills_command == "install-bundled":
+                installed = library.install_bundled(args.skill_names or None)
+                print(json.dumps(jsonable(installed), indent=2, sort_keys=True))
             elif args.skills_command == "view-candidate":
                 print(library.view_candidate(args.candidate_id).raw_content)
             elif args.skills_command == "approve":
@@ -717,9 +734,13 @@ def main(argv: list[str] | None = None) -> int:
         toolset_store = ToolsetConfigStore(default_toolset_config_dir())
         try:
             if args.tools_command in {"list", "status"}:
+                registry = build_local_tool_registry(Path.cwd())
                 print(
                     json.dumps(
-                        toolset_catalog_status(toolset_store.load()),
+                        toolset_catalog_status(
+                            toolset_store.load(),
+                            registry.tool_statuses(),
+                        ),
                         indent=2,
                         sort_keys=True,
                     )

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from .bundled_procedure_skills import BUNDLED_PROCEDURE_SKILLS
 from .models import ProcedureSkill, ProcedureSkillDraft, ProcedureSkillSummary
 from .store import AutonomyStore
 
@@ -100,6 +101,32 @@ class ProcedureSkillLibrary:
                     )
                 )
         return sorted(skills, key=lambda item: item.summary.name)
+
+    def install_bundled(
+        self,
+        names: list[str] | None = None,
+    ) -> list[ProcedureSkillSummary]:
+        selected_names = names or sorted(BUNDLED_PROCEDURE_SKILLS)
+        installed: list[ProcedureSkillSummary] = []
+        unknown = sorted(set(selected_names) - set(BUNDLED_PROCEDURE_SKILLS))
+        if unknown:
+            raise ProcedureSkillError("unknown bundled procedure skill: " + ", ".join(unknown))
+        for name in selected_names:
+            content = BUNDLED_PROCEDURE_SKILLS[name]
+            skill = self._parse_content(
+                content,
+                source="global",
+                path=self.skills_dir / name / "SKILL.md",
+            )
+            destination = self.skills_dir / skill.summary.name / "SKILL.md"
+            if destination.exists():
+                raise FileExistsError(f"procedure skill already exists: {destination}")
+            destination.parent.mkdir(parents=True, exist_ok=False)
+            destination.write_text(content, encoding="utf-8")
+            approved = self._read_skill(destination, self.skills_dir, "global")
+            self.store.sync_procedure_skill(approved.summary)
+            installed.append(approved.summary)
+        return installed
 
     def write_candidate(
         self,

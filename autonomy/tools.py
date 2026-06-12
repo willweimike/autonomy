@@ -7,12 +7,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .browser_tools import BrowserController, browser_tools_available, register_browser_tools
 from .models import Action, ActionIntent, Observation, RiskLevel
 from .toolsets import ToolsetConfiguration
+from .web_tools import register_web_tools
 
 
 ToolHandler = Callable[[dict], Observation]
 ToolValidator = Callable[[dict], None]
+ToolAvailabilityCheck = Callable[[], tuple[bool, str]]
 
 
 @dataclass(frozen=True)
@@ -25,9 +28,15 @@ class ToolSpec:
     side_effects: tuple[str, ...] = ()
     handler: ToolHandler = field(repr=False, compare=False, default=lambda arguments: Observation("", False))
     validator: ToolValidator | None = field(repr=False, compare=False, default=None)
+    availability_check: ToolAvailabilityCheck | None = field(
+        repr=False,
+        compare=False,
+        default=None,
+    )
 
     @property
     def summary(self) -> dict:
+        available, unavailable_reason = self.availability
         return {
             "name": self.name,
             "description": self.description,
@@ -35,12 +44,21 @@ class ToolSpec:
             "argument_contract": self.argument_contract,
             "default_risk": self.default_risk.value,
             "side_effects": self.side_effects,
+            "available": available,
+            "unavailable_reason": unavailable_reason,
         }
+
+    @property
+    def availability(self) -> tuple[bool, str]:
+        if not self.availability_check:
+            return True, ""
+        return self.availability_check()
 
 
 class ToolRegistry:
     def __init__(self):
         self._specs: dict[str, ToolSpec] = {}
+        self._cleanup_callbacks: list[Callable[[], None]] = []
 
     @property
     def names(self) -> set[str]:
@@ -64,6 +82,7 @@ class ToolRegistry:
         argument_contract: dict[str, str] | None = None,
         default_risk: RiskLevel = RiskLevel.LOW,
         side_effects: tuple[str, ...] = (),
+        availability_check: ToolAvailabilityCheck | None = None,
     ) -> None:
         if name in self._specs:
             raise ValueError(f"tool already registered: {name}")
@@ -76,20 +95,32 @@ class ToolRegistry:
             side_effects=side_effects,
             handler=handler,
             validator=validator,
+            availability_check=availability_check,
         )
+
+    def register_cleanup(self, callback: Callable[[], None]) -> None:
+        self._cleanup_callbacks.append(callback)
 
     def spec(self, tool_name: str) -> ToolSpec:
         if tool_name not in self._specs:
             raise KeyError(f"unknown tool: {tool_name}")
         return self._specs[tool_name]
 
-    def filter_by_toolsets(self, configuration: ToolsetConfiguration) -> "ToolRegistry":
+    def filter_by_toolsets(
+        self,
+        configuration: ToolsetConfiguration,
+        *,
+        require_available: bool = True,
+    ) -> "ToolRegistry":
         configuration.validate()
         enabled = configuration.enabled_set
         disabled_tools = configuration.disabled_tool_set
         filtered = ToolRegistry()
         for spec in self._specs.values():
             if spec.toolset not in enabled or spec.name in disabled_tools:
+                continue
+            available, _ = spec.availability
+            if require_available and not available:
                 continue
             filtered.register(
                 spec.name,
@@ -100,8 +131,37 @@ class ToolRegistry:
                 argument_contract=spec.argument_contract,
                 default_risk=spec.default_risk,
                 side_effects=spec.side_effects,
+                availability_check=spec.availability_check,
             )
+        filtered._cleanup_callbacks = list(self._cleanup_callbacks)
         return filtered
+
+    def tool_statuses(self) -> dict[str, dict]:
+        statuses: dict[str, dict] = {}
+        for name, spec in self._specs.items():
+            available, unavailable_reason = spec.availability
+            statuses[name] = {
+                "toolset": spec.toolset,
+                "available": available,
+                "unavailable_reason": unavailable_reason,
+            }
+        return statuses
+
+    def model_specs(self) -> list[dict]:
+        specs: list[dict] = []
+        for name in sorted(self._specs):
+            spec = self._specs[name]
+            specs.append(
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "toolset": spec.toolset,
+                    "argument_contract": dict(spec.argument_contract),
+                    "risk_level": spec.default_risk.value,
+                    "side_effects": list(spec.side_effects),
+                }
+            )
+        return specs
 
     def rejection_reason(self, intent: ActionIntent | Action) -> str:
         spec = self._specs.get(intent.tool)
@@ -155,6 +215,15 @@ class ToolRegistry:
             side_effects=observation.side_effects,
             exit_code=observation.exit_code,
         )
+
+    def close(self) -> None:
+        callbacks = list(reversed(self._cleanup_callbacks))
+        self._cleanup_callbacks.clear()
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
 
 
 class ApprovalPolicy:
@@ -335,4 +404,12 @@ def build_local_tool_registry(
         default_risk=RiskLevel.LOW,
         side_effects=("command-dependent",),
     )
+    register_web_tools(registry)
+    browser_controller = BrowserController()
+    register_browser_tools(
+        registry,
+        browser_controller,
+        availability_check=browser_tools_available,
+    )
+    registry.register_cleanup(browser_controller.close)
     return registry.filter_by_toolsets(toolsets) if toolsets else registry

@@ -20,7 +20,12 @@ class ToolsetDefinition:
 
 
 TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
-    ToolsetDefinition("web", "Web research and extraction tools."),
+    ToolsetDefinition(
+        "web",
+        "Web research and extraction tools.",
+        "implemented",
+        ("web.fetch", "web.extract"),
+    ),
     ToolsetDefinition("search", "Search tools.", "implemented", ("search.text",)),
     ToolsetDefinition("vision", "Image and visual understanding tools."),
     ToolsetDefinition("image_gen", "Image generation tools."),
@@ -36,7 +41,20 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
         "implemented",
         ("filesystem.read", "filesystem.list"),
     ),
-    ToolsetDefinition("browser", "Browser automation tools."),
+    ToolsetDefinition(
+        "browser",
+        "Browser automation tools.",
+        "implemented",
+        (
+            "browser.navigate",
+            "browser.snapshot",
+            "browser.click",
+            "browser.type",
+            "browser.scroll",
+            "browser.back",
+            "browser.press",
+        ),
+    ),
     ToolsetDefinition("skills", "Procedure skill management and discovery tools.", "implemented"),
     ToolsetDefinition("todo", "Task planning and tracking tools."),
     ToolsetDefinition("memory", "Persistent memory tools."),
@@ -178,13 +196,30 @@ class ToolsetConfigStore:
                 temp_path.unlink()
 
 
-def toolset_catalog_status(configuration: ToolsetConfiguration) -> list[dict]:
+def toolset_catalog_status(
+    configuration: ToolsetConfiguration,
+    tool_statuses: dict[str, dict] | None = None,
+) -> list[dict]:
     enabled = configuration.enabled_set
     disabled_tools = configuration.disabled_tool_set
+    tool_statuses = tool_statuses or {}
     rows: list[dict] = []
     for definition in TOOLSET_CATALOG:
         implemented = definition.status == "implemented"
-        available_tools = tuple(tool for tool in definition.tools if tool not in disabled_tools)
+        visible_tools = tuple(tool for tool in definition.tools if tool not in disabled_tools)
+        available_tools = tuple(
+            tool
+            for tool in visible_tools
+            if tool_statuses.get(tool, {}).get("available", True)
+        )
+        unavailable_tools = [
+            {
+                "tool": tool,
+                "reason": str(tool_statuses.get(tool, {}).get("unavailable_reason", "")),
+            }
+            for tool in visible_tools
+            if not tool_statuses.get(tool, {}).get("available", True)
+        ]
         rows.append(
             {
                 "name": definition.name,
@@ -194,6 +229,7 @@ def toolset_catalog_status(configuration: ToolsetConfiguration) -> list[dict]:
                 "enabled": definition.name in enabled,
                 "tools": list(definition.tools),
                 "available_tools": list(available_tools) if implemented and definition.name in enabled else [],
+                "unavailable_tools": unavailable_tools if implemented else [],
             }
         )
     return rows

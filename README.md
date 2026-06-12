@@ -56,6 +56,7 @@ python3.13 -m autonomy recipes list
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
+python3.13 -m autonomy skills install-bundled web-research browser-navigation website-inspection
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -146,15 +147,17 @@ Inspect or change toolset exposure with:
 
 ```bash
 autonomy tools status
+autonomy tools enable web
 autonomy tools enable browser
 autonomy tools disable terminal
 ```
 
-The catalog includes planned Hermes-like toolsets such as `web`, `browser`,
-`memory`, `delegate`, `cronjob`, and `computer_use`, but planned toolsets are not
-exposed to the agent loop until implemented. Enabling a toolset only controls
-which implemented tools are visible to planning; it does not grant extra
-permissions or bypass `ActionGateway`.
+The catalog includes implemented `web` and `browser` toolsets plus planned
+Hermes-like toolsets such as `memory`, `delegate`, `cronjob`, and
+`computer_use`. Planned or unavailable tools are not exposed to the agent loop.
+Enabling a toolset only controls which implemented and available tools are
+visible to planning; it does not grant extra permissions or bypass
+`ActionGateway`.
 
 The first implemented local software-engineering tools are:
 
@@ -163,8 +166,39 @@ The first implemented local software-engineering tools are:
 - `search.text`
 - `shell.execute`
 
-Read-only actions are low risk. Unknown shell commands require interactive
-approval and are rejected in non-interactive mode.
+The implemented web tools are:
+
+- `web.fetch`
+- `web.extract`
+
+The implemented browser tools use headless Chromium through Playwright:
+
+- `browser.navigate`
+- `browser.snapshot`
+- `browser.click`
+- `browser.type`
+- `browser.scroll`
+- `browser.back`
+- `browser.press`
+
+Install the Python package through the project environment, then install the
+Chromium runtime:
+
+```bash
+python3.13 -m playwright install chromium
+autonomy doctor
+```
+
+If Chromium is missing, `doctor` and `tools status` report the browser tools as
+unavailable and they are not exposed to planning.
+
+`browser.snapshot` returns URL, title, visible text, and an `elements` inventory
+of visible actionable controls. Browser interaction candidates should use
+selectors from this inventory instead of guessing selectors from page text.
+
+Read-only local and web fetch actions are low risk. Browser actions are medium
+risk. Unknown shell commands require interactive approval and are rejected in
+non-interactive mode.
 
 Model-generated tool use is represented as an `ActionIntent`:
 
@@ -209,6 +243,20 @@ Initial global skills can be installed under `~/.autonomy/skills/`:
 - `test-diagnosis`
 - `implementation-status-audit`
 - `read-only-code-review`
+
+Web/browser planning skills can be installed from bundled templates:
+
+```bash
+autonomy skills install-bundled web-research browser-navigation website-inspection
+```
+
+These skills require the corresponding enabled and available tools before they
+are considered by the agent loop.
+
+During candidate generation, the model receives the enabled and available tool
+specs from the live `ToolRegistry`, including descriptions, argument contracts,
+toolset, risk level, and side effects. The model still only proposes
+`ActionIntent`; execution remains gated by `ActionGateway`.
 
 Every run finishes with a lightweight `LearningLoop` review. Achieved runs
 with at least two successful outcomes may generate a `new_skill` candidate

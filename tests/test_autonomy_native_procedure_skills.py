@@ -145,6 +145,30 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         )
         self.assertEqual(self.library.list_candidates(), [])
 
+    def test_install_bundled_web_browser_skills_and_filter_by_available_tools(self):
+        installed = self.library.install_bundled(["web-research", "browser-navigation"])
+
+        self.assertEqual(
+            [summary.name for summary in installed],
+            ["web-research", "browser-navigation"],
+        )
+        web_only = self.library.index({"web.fetch", "web.extract"})
+        browser_tools = {
+            "browser.navigate",
+            "browser.snapshot",
+            "browser.click",
+            "browser.type",
+            "browser.scroll",
+            "browser.back",
+            "browser.press",
+        }
+        browser_only = self.library.index(browser_tools)
+
+        self.assertEqual([summary.name for summary in web_only], ["web-research"])
+        self.assertEqual([summary.name for summary in browser_only], ["browser-navigation"])
+        with self.assertRaises(FileExistsError):
+            self.library.install_bundled(["web-research"])
+
     def test_invalid_skill_and_path_escape_are_rejected(self):
         invalid = self.global_skills / "invalid"
         invalid.mkdir(parents=True)

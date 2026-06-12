@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import autonomy
 from autonomy import (
@@ -21,6 +22,7 @@ from autonomy import (
     RiskLevel,
     TerminationReason,
     ToolRegistry,
+    ToolsetConfiguration,
     build_local_tool_registry,
 )
 from autonomy.outcome import ModelAssistedOutcomeEvaluator
@@ -35,8 +37,8 @@ class SequenceModel:
         del state, available_tools
         return [skill.name for skill in skill_index[:3]]
 
-    def propose(self, state, available_tools, procedure_skills):
-        del state, available_tools, procedure_skills
+    def propose(self, state, available_tools, procedure_skills, tool_specs=None):
+        del state, available_tools, procedure_skills, tool_specs
         index = min(self.calls, len(self.candidates_by_call) - 1)
         self.calls += 1
         return self.candidates_by_call[index]
@@ -182,9 +184,9 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
                 super().__init__([[candidate(goal_achieving=True)]])
                 self.contexts = []
 
-            def propose(self, state, available_tools, procedure_skills):
+            def propose(self, state, available_tools, procedure_skills, tool_specs=None):
                 self.contexts.append(state.conversation_context)
-                return super().propose(state, available_tools, procedure_skills)
+                return super().propose(state, available_tools, procedure_skills, tool_specs)
 
         model = ContextModel()
 
@@ -203,6 +205,24 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         started = self.store.inspect_run(result.run_id)["events"][0]["payload"]
         self.assertEqual(started["conversation_session_id"], "session")
         self.assertEqual(started["conversation_turn_id"], "turn")
+
+    def test_agent_loop_passes_registry_tool_specs_to_model(self):
+        class CapturingModel(SequenceModel):
+            def __init__(self):
+                super().__init__([[candidate(goal_achieving=True)]])
+                self.tool_specs = []
+
+            def propose(self, state, available_tools, procedure_skills, tool_specs=None):
+                self.tool_specs.append(tool_specs or [])
+                return super().propose(state, available_tools, procedure_skills, tool_specs)
+
+        model = CapturingModel()
+
+        result = self.agent_loop(model).run("collect evidence", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        self.assertEqual(model.tool_specs[0][0]["name"], "test.tool")
+        self.assertEqual(model.tool_specs[0][0]["risk_level"], "low")
 
     def test_agent_loop_exposes_explicit_no_candidates_termination(self):
         result = self.agent_loop(SequenceModel([[]])).run("nothing available", interactive=False)
@@ -287,6 +307,61 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertIn("path escapes workspace", blocked["payload"][0]["reason"])
         self.assertEqual(selected["payload"]["arguments"], {"path": "valid"})
 
+    def test_agent_loop_executes_web_intent_through_gateway(self):
+        class Headers:
+            def get_content_charset(self):
+                return "utf-8"
+
+            def get(self, name, default=""):
+                return "text/html; charset=utf-8" if name == "content-type" else default
+
+        class Response:
+            status = 200
+            headers = Headers()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                del exc_type, exc, traceback
+
+            def read(self, size=-1):
+                body = b"<html><body>Example Domain</body></html>"
+                return body if size < 0 else body[:size]
+
+            def geturl(self):
+                return "https://example.test/"
+
+        self.registry = build_local_tool_registry(
+            self.tmpdir.name,
+            ToolsetConfiguration(enabled_toolsets=("web",)),
+        )
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="web.fetch",
+                        arguments={
+                            "url": "https://example.test/",
+                            "_goal_achieving": True,
+                        },
+                        purpose="fetch target page",
+                    )
+                ]
+            ]
+        )
+
+        with patch("urllib.request.urlopen", return_value=Response()):
+            result = self.agent_loop(model).run("inspect website", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        journal = self.store.inspect_run(result.run_id)
+        selected = next(
+            event for event in journal["events"] if event["event_type"] == "action_selected"
+        )
+        self.assertEqual(selected["payload"]["tool"], "web.fetch")
+        self.assertEqual(selected["payload"]["tool_spec"]["toolset"], "web")
+
     def test_non_interactive_mode_denies_action_that_requires_approval(self):
         self.registry.register(
             "high.tool",
@@ -348,8 +423,8 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(blocked.termination, TerminationReason.BLOCKED)
 
         class BrokenModel:
-            def propose(self, state, available_tools, procedure_skills):
-                del state, available_tools, procedure_skills
+            def propose(self, state, available_tools, procedure_skills, tool_specs=None):
+                del state, available_tools, procedure_skills, tool_specs
                 raise RuntimeError("model unavailable")
 
         failed = self.agent_loop(BrokenModel()).run("failed", interactive=False)

@@ -240,12 +240,35 @@ class AutonomyNativeModelTest(unittest.TestCase):
                 RunState("run", Goal("goal")),
                 {"filesystem.read"},
                 [selected],
+                tool_specs=[
+                    {
+                        "name": "filesystem.read",
+                        "description": "Read a file.",
+                        "toolset": "file",
+                        "argument_contract": {"path": "string"},
+                        "risk_level": "low",
+                        "side_effects": [],
+                    }
+                ],
             )
 
         user_payload = json.loads(captured["messages"][1]["content"])
         self.assertEqual(
             user_payload["tool_contracts"],
             {"filesystem.read": {"path": "string"}},
+        )
+        self.assertEqual(
+            user_payload["tool_specs"],
+            [
+                {
+                    "name": "filesystem.read",
+                    "description": "Read a file.",
+                    "toolset": "file",
+                    "argument_contract": {"path": "string"},
+                    "risk_level": "low",
+                    "side_effects": [],
+                }
+            ],
         )
         self.assertEqual(
             user_payload["procedure_skills"],
@@ -257,6 +280,56 @@ class AutonomyNativeModelTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_propose_uses_dynamic_web_and_browser_tool_specs(self):
+        captured = {}
+
+        def complete(payload, schema):
+            del schema
+            captured.update(payload)
+            return {"candidates": []}
+
+        specs = [
+            {
+                "name": "web.fetch",
+                "description": "Fetch a URL.",
+                "toolset": "web",
+                "argument_contract": {
+                    "url": "string",
+                    "timeout": "integer (optional)",
+                    "max_chars": "integer (optional)",
+                },
+                "risk_level": "low",
+                "side_effects": ["network-read"],
+            },
+            {
+                "name": "browser.navigate",
+                "description": "Navigate a browser.",
+                "toolset": "browser",
+                "argument_contract": {"url": "string", "timeout": "integer (optional)"},
+                "risk_level": "medium",
+                "side_effects": ["browser-state", "network-read"],
+            },
+        ]
+        with patch.object(self.model, "_complete_json", side_effect=complete):
+            self.model.propose(
+                RunState("run", Goal("inspect website")),
+                {"web.fetch", "browser.navigate"},
+                [],
+                tool_specs=specs,
+            )
+
+        user_payload = json.loads(captured["messages"][1]["content"])
+        self.assertEqual(user_payload["available_tools"], ["browser.navigate", "web.fetch"])
+        self.assertEqual(
+            user_payload["tool_contracts"]["web.fetch"],
+            {
+                "url": "string",
+                "timeout": "integer (optional)",
+                "max_chars": "integer (optional)",
+            },
+        )
+        self.assertEqual(user_payload["tool_specs"], [specs[1], specs[0]])
 
     def test_candidate_schema_limits_tools_to_available_set(self):
         schema = self.model._candidate_schema({"filesystem.read", "search.text"})
@@ -286,7 +359,24 @@ class AutonomyNativeModelTest(unittest.TestCase):
             return {"candidates": []}
 
         with patch.object(self.model, "_complete_json", side_effect=complete):
-            self.model.propose(state, {"filesystem.list"}, [])
+            self.model.propose(
+                state,
+                {"filesystem.list"},
+                [],
+                tool_specs=[
+                    {
+                        "name": "filesystem.list",
+                        "description": "List files.",
+                        "toolset": "file",
+                        "argument_contract": {
+                            "path": "string (optional)",
+                            "recursive": "boolean (optional)",
+                        },
+                        "risk_level": "low",
+                        "side_effects": [],
+                    }
+                ],
+            )
 
         transition = json.loads(captured["messages"][1]["content"])["recent_transitions"][0]
         self.assertEqual(

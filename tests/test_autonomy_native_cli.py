@@ -97,6 +97,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.tools.browser_tools_available", return_value=(False, "missing browser")),
             redirect_stdout(io.StringIO()) as output,
         ):
             result = main(["--db", str(Path(tmpdir) / "doctor.db"), "doctor"])
@@ -644,19 +645,26 @@ requires_tools: [filesystem.read]
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.tools.browser_tools_available", return_value=(False, "missing browser")),
         ):
             with redirect_stdout(io.StringIO()) as output:
                 result = main(["tools", "status"])
             status = json.loads(output.getvalue())
             self.assertEqual(result, 0)
             self.assertIn("browser", {row["name"] for row in status})
+            self.assertIn("web", {row["name"] for row in status})
             file_row = next(row for row in status if row["name"] == "file")
+            web_row = next(row for row in status if row["name"] == "web")
             browser_row = next(row for row in status if row["name"] == "browser")
             self.assertTrue(file_row["enabled"])
             self.assertTrue(file_row["implemented"])
             self.assertIn("filesystem.read", file_row["available_tools"])
-            self.assertFalse(browser_row["implemented"])
+            self.assertTrue(web_row["implemented"])
+            self.assertFalse(web_row["enabled"])
+            self.assertTrue(browser_row["implemented"])
+            self.assertFalse(browser_row["enabled"])
             self.assertEqual(browser_row["available_tools"], [])
+            self.assertEqual(browser_row["unavailable_tools"][0]["reason"], "missing browser")
 
             with redirect_stdout(io.StringIO()):
                 result = main(["tools", "disable", "file"])
@@ -670,13 +678,22 @@ requires_tools: [filesystem.read]
             saved = ToolsetConfigStore(Path(tmpdir) / "config").load()
             self.assertIn("browser", saved.enabled_toolsets)
 
+            with redirect_stdout(io.StringIO()):
+                result = main(["tools", "enable", "web"])
+            self.assertEqual(result, 0)
+            saved = ToolsetConfigStore(Path(tmpdir) / "config").load()
+            self.assertIn("web", saved.enabled_toolsets)
+
             with redirect_stdout(io.StringIO()) as output:
                 result = main(["tools", "status"])
             self.assertEqual(result, 0)
             status = json.loads(output.getvalue())
+            web_row = next(row for row in status if row["name"] == "web")
             browser_row = next(row for row in status if row["name"] == "browser")
+            self.assertTrue(web_row["enabled"])
+            self.assertEqual(web_row["available_tools"], ["web.fetch", "web.extract"])
             self.assertTrue(browser_row["enabled"])
-            self.assertFalse(browser_row["implemented"])
+            self.assertTrue(browser_row["implemented"])
             self.assertEqual(browser_row["available_tools"], [])
 
     def test_tools_cli_rejects_unknown_toolset(self):
@@ -787,6 +804,45 @@ requires_tools: [filesystem.read]
                 )
             self.assertEqual(result, 0)
             self.assertEqual(json.loads(output.getvalue())["status"], "rejected")
+
+    def test_skills_cli_installs_bundled_web_browser_skills(self):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.procedure_skills.Path.home", return_value=Path(tmpdir) / "home"),
+        ):
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            db_path = Path(tmpdir) / "skills.db"
+
+            with redirect_stdout(io.StringIO()) as output:
+                result = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "skills",
+                        "--workspace",
+                        str(workspace),
+                        "install-bundled",
+                        "web-research",
+                        "website-inspection",
+                    ]
+                )
+            installed = json.loads(output.getvalue())
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                [summary["name"] for summary in installed],
+                ["web-research", "website-inspection"],
+            )
+            self.assertTrue(
+                (
+                    Path(tmpdir)
+                    / "home"
+                    / ".autonomy"
+                    / "skills"
+                    / "web-research"
+                    / "SKILL.md"
+                ).is_file()
+            )
 
     def test_curator_cli_is_not_exposed(self):
         with self.assertRaises(SystemExit):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Protocol
+from typing import Any, Protocol
 
 from .providers import ModelClientError, ModelProvider, OpenAICompatibleProvider
 from .models import (
@@ -53,6 +53,7 @@ class CandidateModel(Protocol):
         state: RunState,
         available_tools: set[str],
         procedure_skills: list[ProcedureSkill],
+        tool_specs: list[dict] | None = None,
     ) -> list[CandidatePath]:
         ...
 
@@ -62,13 +63,6 @@ class CandidateModel(Protocol):
 
 class AutonomyModel:
     """Domain model using a provider that never receives tool execution authority."""
-
-    TOOL_CONTRACTS = {
-        "filesystem.read": {"path": "string"},
-        "filesystem.list": {"path": "string (optional)", "recursive": "boolean (optional)"},
-        "search.text": {"query": "string", "path": "string (optional)"},
-        "shell.execute": {"command": "string", "timeout": "integer (optional)"},
-    }
 
     def __init__(
         self,
@@ -277,7 +271,12 @@ class AutonomyModel:
         state: RunState,
         available_tools: set[str],
         procedure_skills: list[ProcedureSkill],
+        tool_specs: list[dict] | None = None,
     ) -> list[CandidatePath]:
+        normalized_tool_specs = self._normalize_tool_specs(
+            available_tools,
+            tool_specs or [],
+        )
         payload = {
             "messages": [
                 {
@@ -326,9 +325,10 @@ class AutonomyModel:
                                 for transition in state.transitions[-6:]
                             ],
                             "available_tools": sorted(available_tools),
+                            "tool_specs": normalized_tool_specs,
                             "tool_contracts": {
-                                name: self.TOOL_CONTRACTS.get(name, {})
-                                for name in sorted(available_tools)
+                                spec["name"]: spec["argument_contract"]
+                                for spec in normalized_tool_specs
                             },
                             "procedure_skills": [
                                 {
@@ -346,6 +346,46 @@ class AutonomyModel:
         return self._parse_candidates(
             self._complete_json(payload, self._candidate_schema(available_tools))
         )
+
+    @staticmethod
+    def _normalize_tool_specs(
+        available_tools: set[str],
+        tool_specs: list[dict],
+    ) -> list[dict]:
+        specs_by_name: dict[str, dict[str, Any]] = {}
+        for raw in tool_specs:
+            if not isinstance(raw, Mapping):
+                continue
+            name = str(raw.get("name", "")).strip()
+            if name not in available_tools:
+                continue
+            argument_contract = raw.get("argument_contract", {})
+            if not isinstance(argument_contract, Mapping):
+                argument_contract = {}
+            side_effects = raw.get("side_effects", [])
+            if not isinstance(side_effects, list):
+                side_effects = []
+            specs_by_name[name] = {
+                "name": name,
+                "description": str(raw.get("description", "")).strip(),
+                "toolset": str(raw.get("toolset", "")).strip(),
+                "argument_contract": dict(argument_contract),
+                "risk_level": str(raw.get("risk_level", "")).strip(),
+                "side_effects": [str(item) for item in side_effects],
+            }
+        for name in available_tools:
+            specs_by_name.setdefault(
+                name,
+                {
+                    "name": name,
+                    "description": "",
+                    "toolset": "",
+                    "argument_contract": {},
+                    "risk_level": "",
+                    "side_effects": [],
+                },
+            )
+        return [specs_by_name[name] for name in sorted(specs_by_name)]
 
     def draft_procedure_skill(self, state: RunState) -> ProcedureSkillDraft:
         payload = {

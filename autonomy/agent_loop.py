@@ -234,7 +234,12 @@ class AgentLoop:
         loaded_skills: list[ProcedureSkill],
     ) -> list[CandidatePath]:
         candidates = [
-            *self.model.propose(state, self.tools.names, loaded_skills),
+            *self.model.propose(
+                state,
+                self.tools.names,
+                loaded_skills,
+                tool_specs=self.tools.model_specs(),
+            ),
             *self.recipes.candidates_for(state),
         ]
         self.store.record_event(state.run_id, state.step, "action_intents_generated", candidates)
@@ -322,6 +327,15 @@ class AgentLoop:
                     "curator_daemon_error",
                     {"error": str(exc)},
                 )
+        try:
+            self.tools.close()
+        except Exception as exc:
+            self.store.record_event(
+                state.run_id,
+                state.step,
+                "tool_cleanup_error",
+                {"error": str(exc)},
+            )
         result = RunResult(
             run_id=state.run_id,
             goal=state.goal.text,
