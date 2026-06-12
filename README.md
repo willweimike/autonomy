@@ -180,6 +180,8 @@ The implemented browser tools use headless Chromium through Playwright:
 - `browser.scroll`
 - `browser.back`
 - `browser.press`
+- `browser.get_images`
+- `browser.console`
 
 Install the Python package through the project environment, then install the
 Chromium runtime:
@@ -195,6 +197,9 @@ unavailable and they are not exposed to planning.
 `browser.snapshot` returns URL, title, visible text, and an `elements` inventory
 of visible actionable controls. Browser interaction candidates should use
 selectors from this inventory instead of guessing selectors from page text.
+`browser.get_images` returns page image URLs, alt text, dimensions, and
+selectors. `browser.console` returns console output and JavaScript page errors,
+or evaluates a small diagnostic JavaScript expression in the current page.
 
 Read-only local and web fetch actions are low risk. Browser actions are medium
 risk. Unknown shell commands require interactive approval and are rejected in

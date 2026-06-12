@@ -53,6 +53,8 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
             "browser.scroll",
             "browser.back",
             "browser.press",
+            "browser.get_images",
+            "browser.console",
         ),
     ),
     ToolsetDefinition("skills", "Procedure skill management and discovery tools.", "implemented"),

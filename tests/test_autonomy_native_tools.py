@@ -1,7 +1,10 @@
 import unittest
 import json
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import tempfile
+import threading
 from unittest.mock import patch
 
 from autonomy import (
@@ -12,7 +15,7 @@ from autonomy import (
     ToolsetConfiguration,
     build_local_tool_registry,
 )
-from autonomy.browser_tools import BrowserController, register_browser_tools
+from autonomy.browser_tools import BrowserController, browser_tools_available, register_browser_tools
 from autonomy.tools import ToolRegistry
 
 
@@ -186,6 +189,8 @@ class AutonomyNativeToolsTest(unittest.TestCase):
 
         self.assertEqual(registry.names, set())
         self.assertFalse(full.tool_statuses()["browser.navigate"]["available"])
+        self.assertFalse(full.tool_statuses()["browser.get_images"]["available"])
+        self.assertFalse(full.tool_statuses()["browser.console"]["available"])
         self.assertIn("missing browser", full.tool_statuses()["browser.navigate"]["unavailable_reason"])
 
     def test_browser_tools_execute_through_controller(self):
@@ -227,6 +232,26 @@ class AutonomyNativeToolsTest(unittest.TestCase):
                 self.calls.append(("press", key))
                 return {"url": "https://example.test", "title": "Title", "text": key}
 
+            def get_images(self):
+                self.calls.append(("get_images",))
+                return {
+                    "url": "https://example.test",
+                    "title": "Title",
+                    "images": [{"src": "https://example.test/a.png", "alt": "A"}],
+                    "count": 1,
+                }
+
+            def console(self, *, clear=False, expression=None):
+                self.calls.append(("console", clear, expression))
+                return {
+                    "success": True,
+                    "url": "https://example.test",
+                    "console_messages": [{"type": "log", "text": "ready"}],
+                    "page_errors": [],
+                    "total_messages": 1,
+                    "total_errors": 0,
+                }
+
         controller = FakeController()
         registry = ToolRegistry()
         register_browser_tools(
@@ -243,14 +268,20 @@ class AutonomyNativeToolsTest(unittest.TestCase):
             Action("browser.scroll", {"direction": "up"}, "scroll", "verify"),
             Action("browser.back", {}, "back", "verify"),
             Action("browser.press", {"key": "Enter"}, "press", "verify"),
+            Action("browser.get_images", {}, "images", "verify"),
+            Action("browser.console", {"clear": True}, "console", "verify"),
         ]
 
         observations = [registry.execute(action) for action in actions]
 
         self.assertTrue(all(observation.succeeded for observation in observations))
         self.assertEqual(registry.spec("browser.navigate").default_risk, RiskLevel.MEDIUM)
+        self.assertEqual(registry.spec("browser.get_images").default_risk, RiskLevel.MEDIUM)
+        self.assertEqual(registry.spec("browser.console").default_risk, RiskLevel.MEDIUM)
         self.assertIn(("click", "#submit", 30000), controller.calls)
         self.assertIn(("type", "#q", "hello", 30000), controller.calls)
+        self.assertIn(("get_images",), controller.calls)
+        self.assertIn(("console", True, None), controller.calls)
 
     def test_browser_snapshot_includes_actionable_elements(self):
         class FakeLocator:
@@ -335,6 +366,169 @@ class AutonomyNativeToolsTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_browser_get_images_normalizes_page_inventory(self):
+        class FakePage:
+            url = "https://example.test/gallery"
+
+            def title(self):
+                return "Gallery"
+
+            def evaluate(self, script):
+                self.script = script
+                return [
+                    {
+                        "src": "https://example.test/a.png",
+                        "alt": "Alpha",
+                        "width": 640,
+                        "height": 480,
+                        "selector": "img[alt=\"Alpha\"]",
+                    },
+                    {
+                        "src": "data:image/png;base64,ignored",
+                        "alt": "Ignored",
+                        "width": 1,
+                        "height": 1,
+                        "selector": "img",
+                    },
+                    {"src": "", "alt": "Empty"},
+                ]
+
+        controller = BrowserController()
+        controller._page = FakePage()
+
+        payload = controller.get_images()
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(
+            payload["images"],
+            [
+                {
+                    "src": "https://example.test/a.png",
+                    "alt": "Alpha",
+                    "width": 640,
+                    "height": 480,
+                    "selector": "img[alt=\"Alpha\"]",
+                }
+            ],
+        )
+
+    def test_browser_console_collects_clears_and_evaluates(self):
+        class FakeConsoleMessage:
+            type = "warning"
+            text = "be careful"
+            location = {"url": "https://example.test/app.js", "lineNumber": 10}
+
+        class FakePage:
+            url = "https://example.test/app"
+
+            def evaluate(self, expression):
+                self.expression = expression
+                return {"title": "App"}
+
+        controller = BrowserController()
+        controller._page = FakePage()
+        controller._record_console_message(FakeConsoleMessage())
+        controller._record_page_error(ValueError("boom"))
+
+        first = controller.console()
+        evaluated = controller.console(expression="document.title", clear=True)
+        cleared = controller.console()
+
+        self.assertEqual(first["total_messages"], 1)
+        self.assertEqual(first["total_errors"], 1)
+        self.assertEqual(evaluated["result"], {"title": "App"})
+        self.assertEqual(cleared["total_messages"], 0)
+        self.assertEqual(cleared["total_errors"], 0)
+
+    def test_browser_console_eval_failure_returns_failed_observation(self):
+        class FakePage:
+            url = "https://example.test/app"
+
+            def evaluate(self, expression):
+                del expression
+                raise ValueError("bad expression")
+
+        controller = BrowserController()
+        controller._page = FakePage()
+        registry = ToolRegistry()
+        register_browser_tools(
+            registry,
+            controller,
+            availability_check=lambda: (True, ""),
+        )
+
+        observation = registry.execute(
+            Action(
+                "browser.console",
+                {"expression": "throw new Error('bad')"},
+                "eval",
+                "verify",
+            )
+        )
+
+        self.assertFalse(observation.succeeded)
+        self.assertIn("ValueError: bad expression", observation.error)
+
+    def test_browser_images_and_console_smoke_on_controlled_page(self):
+        available, reason = browser_tools_available()
+        if not available:
+            self.skipTest(reason)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "index.html").write_text(
+                """<!doctype html>
+<html>
+  <head>
+    <title>Browser Smoke</title>
+    <script>
+      console.log("smoke-ready");
+      window.smokeState = {ready: true, count: 2};
+    </script>
+  </head>
+  <body>
+    <h1>Browser Smoke</h1>
+    <img src="/asset.png" alt="Sample image" width="10" height="20">
+  </body>
+</html>
+""",
+                encoding="utf-8",
+            )
+            (root / "asset.png").write_bytes(b"not-a-real-png")
+            handler = partial(SimpleHTTPRequestHandler, directory=str(root))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            registry = None
+            try:
+                registry = build_local_tool_registry(
+                    root,
+                    ToolsetConfiguration(enabled_toolsets=("browser",)),
+                )
+                url = f"http://127.0.0.1:{server.server_port}/index.html"
+
+                navigate = registry.execute(
+                    Action("browser.navigate", {"url": url}, "navigate", "verify")
+                )
+                images = registry.execute(
+                    Action("browser.get_images", {}, "images", "verify")
+                )
+                console = registry.execute(
+                    Action("browser.console", {"expression": "window.smokeState"}, "console", "verify")
+                )
+            finally:
+                if registry is not None:
+                    registry.close()
+                server.shutdown()
+                server.server_close()
+
+        self.assertTrue(navigate.succeeded)
+        image_payload = json.loads(images.output)
+        console_payload = json.loads(console.output)
+        self.assertEqual(image_payload["count"], 1)
+        self.assertEqual(image_payload["images"][0]["alt"], "Sample image")
+        self.assertEqual(console_payload["result"], {"ready": True, "count": 2})
 
     def test_shell_risk_is_reassessed_by_policy(self):
         policy = ApprovalPolicy(prompt=lambda message: False)

@@ -43,7 +43,7 @@ description: Navigate and inspect interactive web pages with governed browser to
 version: 1.0.0
 tags: [browser, navigation]
 platforms: [macos, linux, windows]
-requires_tools: [browser.navigate, browser.snapshot, browser.click, browser.type, browser.scroll, browser.back, browser.press]
+requires_tools: [browser.navigate, browser.snapshot, browser.click, browser.type, browser.scroll, browser.back, browser.press, browser.get_images, browser.console]
 ---
 
 # Browser Navigation
@@ -59,6 +59,10 @@ Workflow:
   `browser.click` and `browser.type`.
 - Use `browser.scroll`, `browser.back`, or `browser.press` only when they are
   needed to reveal or reach information.
+- Use `browser.get_images` when the goal requires finding image assets, image
+  alt text, or page media inventory.
+- Use `browser.console` when the page appears broken, dynamic content is
+  missing, or JavaScript errors may explain the current state.
 
 Tool use rules:
 - Browser actions are medium risk and may require approval.
@@ -71,10 +75,14 @@ Pitfalls:
 - Do not assume a click succeeded without a follow-up snapshot.
 - Do not repeat the same interaction unless the latest snapshot shows a reason.
 - Do not use selectors from memory after navigation changes the page state.
+- Do not use `browser.console` expression evaluation for broad automation; keep
+  it to diagnostics or small DOM state checks.
 
 Outcome checks:
 - The snapshot should show the URL, title, relevant visible page text, and
   actionable elements when interaction is needed.
+- Console output can explain silent page failures, but visible page state still
+  needs a snapshot when the task depends on what the user would see.
 - Continue if page state is ambiguous.
 """,
     "website-inspection": """---
@@ -83,7 +91,7 @@ description: Inspect a website by combining web extraction with browser snapshot
 version: 1.0.0
 tags: [web, browser, inspection]
 platforms: [macos, linux, windows]
-requires_tools: [web.extract, browser.navigate, browser.snapshot]
+requires_tools: [web.extract, browser.navigate, browser.snapshot, browser.get_images, browser.console]
 ---
 
 # Website Inspection
@@ -95,6 +103,10 @@ Workflow:
 - Use `web.extract` first for static page content.
 - Use `browser.navigate` and `browser.snapshot` only if the page requires
   rendering, interaction, or visual page state.
+- Use `browser.get_images` when website media or image metadata is part of the
+  inspection goal.
+- Use `browser.console` to diagnose broken dynamic pages or missing client-side
+  content.
 - Compare the extracted text and browser snapshot before drawing conclusions.
 - If interaction becomes necessary, rely on snapshot `elements` selectors.
 

@@ -161,6 +161,8 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "browser.scroll",
             "browser.back",
             "browser.press",
+            "browser.get_images",
+            "browser.console",
         }
         browser_only = self.library.index(browser_tools)
 
