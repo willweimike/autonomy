@@ -21,6 +21,7 @@ from autonomy import (
     RunResult,
     TerminationReason,
 )
+from autonomy.toolsets import ToolsetConfigStore
 
 
 class FakeProvider:
@@ -95,6 +96,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             redirect_stdout(io.StringIO()) as output,
         ):
             result = main(["--db", str(Path(tmpdir) / "doctor.db"), "doctor"])
@@ -103,6 +105,8 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertIn('"python_3_13_or_newer": true', output.getvalue())
         self.assertIn('"model_configured": false', output.getvalue())
         self.assertIn('"filesystem.read"', output.getvalue())
+        self.assertIn('"tool_config_valid": true', output.getvalue())
+        self.assertIn('"enabled_toolsets"', output.getvalue())
 
     def test_doctor_reports_database_failure_without_traceback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -110,6 +114,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
             invalid_parent.write_text("file", encoding="utf-8")
             with (
                 patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+                patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
                 redirect_stdout(io.StringIO()) as output,
             ):
                 result = main(["--db", str(invalid_parent / "doctor.db"), "doctor"])
@@ -128,6 +133,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
             patch.dict("os.environ", environment, clear=False),
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             redirect_stderr(io.StringIO()) as error,
         ):
             result = main(
@@ -154,6 +160,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.SessionShell.run", return_value=0) as shell_run,
         ):
             result = main(
@@ -175,6 +182,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.SessionShell.run", return_value=0) as shell_run,
         ):
             result = main(["--db", str(Path(tmpdir) / "chat.db")])
@@ -318,6 +326,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn('"python_3_13_or_newer": true', output.getvalue())
         self.assertIn('"model_configured": false', output.getvalue())
+        self.assertIn('"tool_config_valid": true', output.getvalue())
 
     def test_session_shell_inspects_run_and_handles_exit(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -468,6 +477,7 @@ requires_tools: [filesystem.read]
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.create_provider", return_value=FakeProvider()),
             redirect_stdout(io.StringIO()) as output,
         ):
@@ -490,6 +500,7 @@ requires_tools: [filesystem.read]
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             patch(
                 "autonomy.cli.create_provider",
                 return_value=FakeProvider(error=ModelClientError("endpoint is unreachable")),
@@ -514,6 +525,7 @@ requires_tools: [filesystem.read]
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.create_provider", return_value=FakeProvider(models=["gpt-test"])),
             redirect_stdout(io.StringIO()) as output,
         ):
@@ -627,6 +639,56 @@ requires_tools: [filesystem.read]
 
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue())[0]["id"], "recipe")
+
+    def test_tools_cli_lists_status_and_persists_enable_disable(self):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
+        ):
+            with redirect_stdout(io.StringIO()) as output:
+                result = main(["tools", "status"])
+            status = json.loads(output.getvalue())
+            self.assertEqual(result, 0)
+            self.assertIn("browser", {row["name"] for row in status})
+            file_row = next(row for row in status if row["name"] == "file")
+            browser_row = next(row for row in status if row["name"] == "browser")
+            self.assertTrue(file_row["enabled"])
+            self.assertTrue(file_row["implemented"])
+            self.assertIn("filesystem.read", file_row["available_tools"])
+            self.assertFalse(browser_row["implemented"])
+            self.assertEqual(browser_row["available_tools"], [])
+
+            with redirect_stdout(io.StringIO()):
+                result = main(["tools", "disable", "file"])
+            self.assertEqual(result, 0)
+            saved = ToolsetConfigStore(Path(tmpdir) / "config").load()
+            self.assertNotIn("file", saved.enabled_toolsets)
+
+            with redirect_stdout(io.StringIO()):
+                result = main(["tools", "enable", "browser"])
+            self.assertEqual(result, 0)
+            saved = ToolsetConfigStore(Path(tmpdir) / "config").load()
+            self.assertIn("browser", saved.enabled_toolsets)
+
+            with redirect_stdout(io.StringIO()) as output:
+                result = main(["tools", "status"])
+            self.assertEqual(result, 0)
+            status = json.loads(output.getvalue())
+            browser_row = next(row for row in status if row["name"] == "browser")
+            self.assertTrue(browser_row["enabled"])
+            self.assertFalse(browser_row["implemented"])
+            self.assertEqual(browser_row["available_tools"], [])
+
+    def test_tools_cli_rejects_unknown_toolset(self):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
+            redirect_stderr(io.StringIO()) as error,
+        ):
+            result = main(["tools", "enable", "not-a-toolset"])
+
+        self.assertEqual(result, 2)
+        self.assertIn("unknown toolset", error.getvalue())
 
     def test_skills_cli_lists_views_and_approves_candidates(self):
         with (

@@ -1,8 +1,15 @@
-import tempfile
 import unittest
 from pathlib import Path
+import tempfile
 
-from autonomy import Action, ActionIntent, ApprovalPolicy, RiskLevel, build_local_tool_registry
+from autonomy import (
+    Action,
+    ActionIntent,
+    ApprovalPolicy,
+    RiskLevel,
+    ToolsetConfiguration,
+    build_local_tool_registry,
+)
 
 
 class AutonomyNativeToolsTest(unittest.TestCase):
@@ -24,7 +31,10 @@ class AutonomyNativeToolsTest(unittest.TestCase):
 
             self.assertTrue(read.succeeded)
             self.assertEqual(action.purpose, "read sample")
-            self.assertEqual(registry.spec("filesystem.read").toolset, "filesystem")
+            self.assertEqual(registry.spec("filesystem.read").toolset, "file")
+            self.assertEqual(registry.spec("filesystem.list").toolset, "file")
+            self.assertEqual(registry.spec("search.text").toolset, "search")
+            self.assertEqual(registry.spec("shell.execute").toolset, "terminal")
             self.assertEqual(registry.contracts["filesystem.read"], {"path": "string"})
             self.assertIn("sample.txt", listing.output)
             self.assertIn("sample.txt:1:needle", search.output)
@@ -40,6 +50,46 @@ class AutonomyNativeToolsTest(unittest.TestCase):
 
             self.assertFalse(observation.succeeded)
             self.assertIn("path escapes workspace", observation.error)
+
+    def test_default_toolsets_expose_mvp_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(tmpdir, ToolsetConfiguration())
+
+        self.assertEqual(
+            sorted(registry.names),
+            ["filesystem.list", "filesystem.read", "search.text", "shell.execute"],
+        )
+
+    def test_disabled_toolset_is_not_available(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("search", "terminal", "skills")),
+            )
+
+        self.assertNotIn("filesystem.read", registry.names)
+        self.assertNotIn("filesystem.list", registry.names)
+        self.assertIn("search.text", registry.names)
+        self.assertIn("shell.execute", registry.names)
+
+    def test_planned_toolsets_do_not_expose_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("browser", "web")),
+            )
+
+        self.assertEqual(registry.names, set())
+
+    def test_disabled_individual_tool_is_not_available(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(disabled_tools=("shell.execute",)),
+            )
+
+        self.assertNotIn("shell.execute", registry.names)
+        self.assertIn("filesystem.read", registry.names)
 
     def test_shell_risk_is_reassessed_by_policy(self):
         policy = ApprovalPolicy(prompt=lambda message: False)

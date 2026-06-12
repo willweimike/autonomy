@@ -39,6 +39,11 @@ from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon, SkillCurator
 from .store import AutonomyStore
 from .tools import ApprovalPolicy, build_local_tool_registry
+from .toolsets import (
+    ToolsetConfigStore,
+    ToolsetConfigurationError,
+    toolset_catalog_status,
+)
 from .outcome import ModelAssistedOutcomeEvaluator
 
 
@@ -50,18 +55,24 @@ def default_model_config_dir() -> Path:
     return Path.home() / ".autonomy"
 
 
+def default_toolset_config_dir() -> Path:
+    return Path.home() / ".autonomy"
+
+
 def build_agent_loop(
     workspace: Path,
     db_path: Path,
     *,
     config_dir: Path | None = None,
+    tool_config_dir: Path | None = None,
 ) -> AgentLoop:
     store = AutonomyStore(db_path)
     config_store = ModelConfigStore(config_dir or default_model_config_dir())
     provider = create_provider(config_store.load(), config_store)
     model = AutonomyModel.from_provider(provider)
     procedure_skills = ProcedureSkillLibrary(workspace, store)
-    tools = build_local_tool_registry(workspace)
+    toolsets = ToolsetConfigStore(tool_config_dir or default_toolset_config_dir()).load()
+    tools = build_local_tool_registry(workspace, toolsets)
     action_gateway = ActionGateway(
         tools=tools,
         store=store,
@@ -99,6 +110,7 @@ class SessionShell:
         self.db_path = db_path
         self.max_steps = max_steps
         self.config_dir = config_dir or default_model_config_dir()
+        self.tool_config_dir = config_dir or default_toolset_config_dir()
         self.input_func = input_func
         self.output = output
         self.agent_loop_factory = agent_loop_factory or self._build_agent_loop
@@ -132,7 +144,12 @@ class SessionShell:
             self._run_goal(line)
 
     def _build_agent_loop(self, workspace: Path, db_path: Path) -> AgentLoop:
-        return build_agent_loop(workspace, db_path, config_dir=self.config_dir)
+        return build_agent_loop(
+            workspace,
+            db_path,
+            config_dir=self.config_dir,
+            tool_config_dir=self.tool_config_dir,
+        )
 
     def _build_conversation_components(self):
         try:
@@ -184,13 +201,19 @@ class SessionShell:
                         "  /max-steps N",
                         "  /skills",
                         "  /recipes",
+                        "  /tools",
                     ]
                 )
             )
             return True
         if command == "/doctor":
             with redirect_stdout(self.output):
-                doctor(self.db_path, ModelConfigStore(self.config_dir), self.workspace)
+                doctor(
+                    self.db_path,
+                    ModelConfigStore(self.config_dir),
+                    self.workspace,
+                    ToolsetConfigStore(self.tool_config_dir),
+                )
             return True
         if command == "/inspect":
             if len(arguments) != 1:
@@ -238,6 +261,9 @@ class SessionShell:
                 )
             )
             return True
+        if command == "/tools":
+            self._handle_tools_command(arguments)
+            return True
         self._write(f"unknown command: {command}")
         return True
 
@@ -251,7 +277,10 @@ class SessionShell:
         self._handle_candidate_skill_prompts(response.candidate_skills)
 
     def _handle_skills_command(self, arguments: list[str]) -> None:
-        registry = build_local_tool_registry(self.workspace)
+        registry = build_local_tool_registry(
+            self.workspace,
+            ToolsetConfigStore(self.tool_config_dir).load(),
+        )
         library = ProcedureSkillLibrary(self.workspace, AutonomyStore(self.db_path))
         try:
             if not arguments:
@@ -275,8 +304,30 @@ class SessionShell:
                 self._write(
                     "usage: /skills [candidates|view-candidate CANDIDATE_ID|approve CANDIDATE_ID|reject CANDIDATE_ID]"
                 )
-        except (KeyError, FileExistsError, ProcedureSkillError) as exc:
+        except (KeyError, FileExistsError, ProcedureSkillError, ToolsetConfigurationError) as exc:
             self._write(f"skill error: {exc}")
+
+    def _handle_tools_command(self, arguments: list[str]) -> None:
+        store = ToolsetConfigStore(self.tool_config_dir)
+        try:
+            if not arguments or arguments[0] in {"list", "status"}:
+                self._write(
+                    json.dumps(
+                        toolset_catalog_status(store.load()),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return
+            if arguments[0] == "enable" and len(arguments) == 2:
+                self._write(json.dumps(store.enable(arguments[1]).as_document(), indent=2, sort_keys=True))
+                return
+            if arguments[0] == "disable" and len(arguments) == 2:
+                self._write(json.dumps(store.disable(arguments[1]).as_document(), indent=2, sort_keys=True))
+                return
+            self._write("usage: /tools [list|status|enable TOOLSET|disable TOOLSET]")
+        except ToolsetConfigurationError as exc:
+            self._write(f"toolset error: {exc}")
 
     def _handle_candidate_skill_prompts(self, candidates: tuple[dict, ...]) -> None:
         if not candidates:
@@ -373,6 +424,15 @@ def build_parser() -> argparse.ArgumentParser:
     disable_skill = skills_sub.add_parser("disable")
     disable_skill.add_argument("skill_name")
 
+    tools = subparsers.add_parser("tools")
+    tools_sub = tools.add_subparsers(dest="tools_command", required=True)
+    tools_sub.add_parser("list")
+    tools_sub.add_parser("status")
+    enable_toolset = tools_sub.add_parser("enable")
+    enable_toolset.add_argument("toolset")
+    disable_toolset = tools_sub.add_parser("disable")
+    disable_toolset.add_argument("toolset")
+
     return parser
 
 
@@ -464,7 +524,12 @@ def setup_model(provider_argument: str | None, config_store: ModelConfigStore) -
     return 0
 
 
-def doctor(db_path: Path, config_store: ModelConfigStore, workspace: Path | None = None) -> int:
+def doctor(
+    db_path: Path,
+    config_store: ModelConfigStore,
+    workspace: Path | None = None,
+    toolset_store: ToolsetConfigStore | None = None,
+) -> int:
     database_error = ""
     try:
         AutonomyStore(db_path)
@@ -481,6 +546,17 @@ def doctor(db_path: Path, config_store: ModelConfigStore, workspace: Path | None
     candidate_store_path = autonomy_home / "skill-candidates"
     skill_store_writable = _directory_writable(skill_store_path)
     candidate_store_writable = _directory_writable(candidate_store_path)
+    toolset_store = toolset_store or ToolsetConfigStore(default_toolset_config_dir())
+    try:
+        toolset_configuration = toolset_store.load()
+        toolset_error = ""
+    except ToolsetConfigurationError as exc:
+        toolset_configuration = None
+        toolset_error = str(exc)
+    registry = build_local_tool_registry(
+        workspace or Path.cwd(),
+        toolset_configuration,
+    ) if toolset_configuration else build_local_tool_registry(workspace or Path.cwd())
     checks = {
         "python_3_13_or_newer": sys.version_info >= (3, 13),
         "database_writable": database_writable,
@@ -500,7 +576,12 @@ def doctor(db_path: Path, config_store: ModelConfigStore, workspace: Path | None
         "model_endpoint_reachable": False,
         "model_available": False,
         "model_error": "",
-        "tools": sorted(build_local_tool_registry(workspace or Path.cwd()).names),
+        "tool_config_path": str(toolset_store.config_path),
+        "tool_config_valid": toolset_configuration is not None,
+        "tool_config_error": toolset_error,
+        "enabled_toolsets": sorted(toolset_configuration.enabled_toolsets) if toolset_configuration else [],
+        "toolsets": toolset_catalog_status(toolset_configuration) if toolset_configuration else [],
+        "tools": sorted(registry.names),
     }
     try:
         configuration = config_store.load()
@@ -538,6 +619,7 @@ def doctor(db_path: Path, config_store: ModelConfigStore, workspace: Path | None
         for name in (
             "python_3_13_or_newer",
             "database_writable",
+            "tool_config_valid",
             "model_configured",
             "configuration_valid",
             "credentials_configured",
@@ -586,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if args.command == "doctor":
-        return doctor(args.db, config_store)
+        return doctor(args.db, config_store, toolset_store=ToolsetConfigStore(default_toolset_config_dir()))
     store = AutonomyStore(args.db)
     if args.command == "inspect":
         print(json.dumps(store.inspect_run(args.run_id), indent=2, sort_keys=True))
@@ -600,7 +682,10 @@ def main(argv: list[str] | None = None) -> int:
             store.set_recipe_state(args.recipe_id, enabled=False)
         return 0
     if args.command == "skills":
-        registry = build_local_tool_registry(args.workspace.resolve())
+        registry = build_local_tool_registry(
+            args.workspace.resolve(),
+            ToolsetConfigStore(default_toolset_config_dir()).load(),
+        )
         library = ProcedureSkillLibrary(args.workspace.resolve(), store)
         try:
             if args.skills_command == "list":
@@ -628,13 +713,45 @@ def main(argv: list[str] | None = None) -> int:
         except (KeyError, FileExistsError, ProcedureSkillError) as exc:
             print(f"skill error: {exc}", file=sys.stderr)
             return 2
+    if args.command == "tools":
+        toolset_store = ToolsetConfigStore(default_toolset_config_dir())
+        try:
+            if args.tools_command in {"list", "status"}:
+                print(
+                    json.dumps(
+                        toolset_catalog_status(toolset_store.load()),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            elif args.tools_command == "enable":
+                print(
+                    json.dumps(
+                        toolset_store.enable(args.toolset).as_document(),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            elif args.tools_command == "disable":
+                print(
+                    json.dumps(
+                        toolset_store.disable(args.toolset).as_document(),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            return 0
+        except ToolsetConfigurationError as exc:
+            print(f"toolset error: {exc}", file=sys.stderr)
+            return 2
     try:
         agent_loop = build_agent_loop(
             args.workspace.resolve(),
             args.db,
             config_dir=default_model_config_dir(),
+            tool_config_dir=default_toolset_config_dir(),
         )
-    except (ProviderConfigurationError, ValueError) as exc:
+    except (ProviderConfigurationError, ToolsetConfigurationError, ValueError) as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
     result = agent_loop.run(

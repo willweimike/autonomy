@@ -47,6 +47,15 @@ from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon, SkillCurator
 from .store import AutonomyStore
 from .tools import ApprovalPolicy, ToolRegistry, ToolSpec, build_local_tool_registry
+from .toolsets import (
+    DEFAULT_ENABLED_TOOLSETS,
+    TOOLSET_CATALOG,
+    ToolsetConfigStore,
+    ToolsetConfiguration,
+    ToolsetConfigurationError,
+    ToolsetDefinition,
+    toolset_catalog_status,
+)
 from .outcome import DeterministicOutcomeEvaluator, ModelAssistedOutcomeEvaluator
 
 __all__ = [
@@ -67,6 +76,7 @@ __all__ = [
     "ConversationResponse",
     "ConversationTurn",
     "CuratorDaemon",
+    "DEFAULT_ENABLED_TOOLSETS",
     "DeterministicOutcomeEvaluator",
     "EdgeType",
     "GoalStatus",
@@ -103,5 +113,11 @@ __all__ = [
     "TerminationReason",
     "ToolRegistry",
     "ToolSpec",
+    "TOOLSET_CATALOG",
+    "ToolsetConfigStore",
+    "ToolsetConfiguration",
+    "ToolsetConfigurationError",
+    "ToolsetDefinition",
     "build_local_tool_registry",
+    "toolset_catalog_status",
 ]

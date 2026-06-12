@@ -89,6 +89,7 @@ Session commands:
 /max-steps N
 /skills
 /recipes
+/tools
 ```
 
 ## Model Provider Setup
@@ -123,7 +124,39 @@ autonomy run "Read README.md and summarize the implemented system" \
 Ollama's base URL must include `/v1`. The default is
 `http://127.0.0.1:11434/v1`.
 
-The MVP exposes four local software-engineering tools:
+## Toolsets
+
+Tool availability is controlled by a global Autonomy-native toolset catalog and
+configuration file:
+
+```text
+~/.autonomy/tools.yaml
+```
+
+The default enabled toolsets are:
+
+```text
+file
+terminal
+search
+skills
+```
+
+Inspect or change toolset exposure with:
+
+```bash
+autonomy tools status
+autonomy tools enable browser
+autonomy tools disable terminal
+```
+
+The catalog includes planned Hermes-like toolsets such as `web`, `browser`,
+`memory`, `delegate`, `cronjob`, and `computer_use`, but planned toolsets are not
+exposed to the agent loop until implemented. Enabling a toolset only controls
+which implemented tools are visible to planning; it does not grant extra
+permissions or bypass `ActionGateway`.
+
+The first implemented local software-engineering tools are:
 
 - `filesystem.read`
 - `filesystem.list`

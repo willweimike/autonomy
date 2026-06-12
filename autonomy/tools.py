@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .models import Action, ActionIntent, Observation, RiskLevel
+from .toolsets import ToolsetConfiguration
 
 
 ToolHandler = Callable[[dict], Observation]
@@ -81,6 +82,26 @@ class ToolRegistry:
         if tool_name not in self._specs:
             raise KeyError(f"unknown tool: {tool_name}")
         return self._specs[tool_name]
+
+    def filter_by_toolsets(self, configuration: ToolsetConfiguration) -> "ToolRegistry":
+        configuration.validate()
+        enabled = configuration.enabled_set
+        disabled_tools = configuration.disabled_tool_set
+        filtered = ToolRegistry()
+        for spec in self._specs.values():
+            if spec.toolset not in enabled or spec.name in disabled_tools:
+                continue
+            filtered.register(
+                spec.name,
+                spec.handler,
+                spec.validator,
+                description=spec.description,
+                toolset=spec.toolset,
+                argument_contract=spec.argument_contract,
+                default_risk=spec.default_risk,
+                side_effects=spec.side_effects,
+            )
+        return filtered
 
     def rejection_reason(self, intent: ActionIntent | Action) -> str:
         spec = self._specs.get(intent.tool)
@@ -189,7 +210,10 @@ def _resolve_inside(root: Path, raw_path: str) -> Path:
     return resolved
 
 
-def build_local_tool_registry(workspace: str | Path) -> ToolRegistry:
+def build_local_tool_registry(
+    workspace: str | Path,
+    toolsets: ToolsetConfiguration | None = None,
+) -> ToolRegistry:
     root = Path(workspace).resolve()
     registry = ToolRegistry()
 
@@ -279,7 +303,7 @@ def build_local_tool_registry(workspace: str | Path) -> ToolRegistry:
         read_file,
         validate_read,
         description="Read a UTF-8 text file inside the workspace.",
-        toolset="filesystem",
+        toolset="file",
         argument_contract={"path": "string"},
         default_risk=RiskLevel.LOW,
     )
@@ -288,7 +312,7 @@ def build_local_tool_registry(workspace: str | Path) -> ToolRegistry:
         list_files,
         validate_list,
         description="List files or directories inside the workspace.",
-        toolset="filesystem",
+        toolset="file",
         argument_contract={"path": "string (optional)", "recursive": "boolean (optional)"},
         default_risk=RiskLevel.LOW,
     )
@@ -306,9 +330,9 @@ def build_local_tool_registry(workspace: str | Path) -> ToolRegistry:
         shell_execute,
         validate_shell,
         description="Execute a shell command in the workspace.",
-        toolset="shell",
+        toolset="terminal",
         argument_contract={"command": "string", "timeout": "integer (optional)"},
         default_risk=RiskLevel.LOW,
         side_effects=("command-dependent",),
     )
-    return registry
+    return registry.filter_by_toolsets(toolsets) if toolsets else registry
