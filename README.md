@@ -56,7 +56,7 @@ python3.13 -m autonomy recipes list
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled code-editing web-research browser-navigation website-inspection
+python3.13 -m autonomy skills install-bundled code-editing process-management web-research browser-navigation website-inspection
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -168,6 +168,18 @@ The first implemented local software-engineering tools are:
 - `filesystem.search_files`
 - `search.text`
 - `shell.execute`
+- `process.start`
+- `process.poll`
+- `process.log`
+- `process.wait`
+- `process.stop`
+
+Use `shell.execute` for short foreground commands. Use `process.start` for
+dev servers, watchers, long tests, or other commands that need later
+inspection through `process.poll`, `process.log`, or `process.wait`.
+`process.stop` terminates managed background processes. Starting and stopping
+processes are medium-risk actions and still require approval in interactive
+use; non-interactive runs reject them by default.
 
 The implemented web tools are:
 
@@ -254,11 +266,12 @@ Initial global skills can be installed under `~/.autonomy/skills/`:
 - `implementation-status-audit`
 - `read-only-code-review`
 - `code-editing`
+- `process-management`
 
 Code editing and web/browser planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled code-editing web-research browser-navigation website-inspection
+autonomy skills install-bundled code-editing process-management web-research browser-navigation website-inspection
 ```
 
 These skills require the corresponding enabled and available tools before they

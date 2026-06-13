@@ -1,5 +1,6 @@
 import unittest
 import json
+import sys
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,6 +43,7 @@ class AutonomyNativeToolsTest(unittest.TestCase):
             self.assertEqual(registry.spec("filesystem.list").toolset, "file")
             self.assertEqual(registry.spec("search.text").toolset, "search")
             self.assertEqual(registry.spec("shell.execute").toolset, "terminal")
+            self.assertEqual(registry.spec("process.start").toolset, "terminal")
             self.assertEqual(registry.contracts["filesystem.read"], {"path": "string"})
             self.assertIn("sample.txt", listing.output)
             self.assertIn("sample.txt:1:needle", search.output)
@@ -70,6 +72,11 @@ class AutonomyNativeToolsTest(unittest.TestCase):
                 "filesystem.read",
                 "filesystem.search_files",
                 "filesystem.write",
+                "process.log",
+                "process.poll",
+                "process.start",
+                "process.stop",
+                "process.wait",
                 "search.text",
                 "shell.execute",
             ],
@@ -86,6 +93,7 @@ class AutonomyNativeToolsTest(unittest.TestCase):
         self.assertNotIn("filesystem.list", registry.names)
         self.assertIn("search.text", registry.names)
         self.assertIn("shell.execute", registry.names)
+        self.assertIn("process.start", registry.names)
 
     def test_web_exposes_and_unavailable_browser_hides_tools(self):
         with (
@@ -107,7 +115,145 @@ class AutonomyNativeToolsTest(unittest.TestCase):
             )
 
         self.assertNotIn("shell.execute", registry.names)
+        self.assertIn("process.start", registry.names)
         self.assertIn("filesystem.read", registry.names)
+
+    def test_process_tools_start_wait_log_poll_and_validate_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "subdir").mkdir()
+            registry = build_local_tool_registry(root)
+
+            start = registry.execute(
+                Action(
+                    "process.start",
+                    {
+                        "command": f"{sys.executable} -c \"print('ready', flush=True)\"",
+                        "workdir": "subdir",
+                    },
+                    "start process",
+                    "verify",
+                )
+            )
+            process_id = json.loads(start.output)["process_id"]
+            waited = registry.execute(
+                Action(
+                    "process.wait",
+                    {"process_id": process_id, "timeout": 5},
+                    "wait process",
+                    "verify",
+                )
+            )
+            polled = registry.execute(
+                Action("process.poll", {"process_id": process_id}, "poll", "verify")
+            )
+            logged = registry.execute(
+                Action(
+                    "process.log",
+                    {"process_id": process_id, "max_chars": 20},
+                    "log",
+                    "verify",
+                )
+            )
+            escape_reason = registry.rejection_reason(
+                ActionIntent(
+                    "process.start",
+                    {"command": "pwd", "workdir": "../outside"},
+                    "escape",
+                )
+            )
+            timeout_reason = registry.rejection_reason(
+                ActionIntent(
+                    "process.wait",
+                    {"process_id": process_id, "timeout": 0},
+                    "bad timeout",
+                )
+            )
+            registry.close()
+
+        start_payload = json.loads(start.output)
+        waited_payload = json.loads(waited.output)
+        polled_payload = json.loads(polled.output)
+        logged_payload = json.loads(logged.output)
+        self.assertTrue(start.succeeded)
+        self.assertEqual(start_payload["status"], "running")
+        self.assertEqual(start_payload["cwd"], "subdir")
+        self.assertTrue(waited.succeeded)
+        self.assertFalse(waited_payload["timed_out"])
+        self.assertEqual(waited_payload["status"], "exited")
+        self.assertEqual(waited_payload["exit_code"], 0)
+        self.assertEqual(polled_payload["status"], "exited")
+        self.assertIn("ready", logged_payload["output"])
+        self.assertIn("workdir escapes workspace", escape_reason)
+        self.assertIn("timeout must be at least 1", timeout_reason)
+
+    def test_process_wait_timeout_and_stop_terminate_running_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(tmpdir)
+            start = registry.execute(
+                Action(
+                    "process.start",
+                    {
+                        "command": (
+                            f"{sys.executable} -c "
+                            "\"import time; print('started', flush=True); time.sleep(30)\""
+                        )
+                    },
+                    "start long process",
+                    "verify",
+                )
+            )
+            process_id = json.loads(start.output)["process_id"]
+            waited = registry.execute(
+                Action(
+                    "process.wait",
+                    {"process_id": process_id, "timeout": 1},
+                    "wait timeout",
+                    "verify",
+                )
+            )
+            stopped = registry.execute(
+                Action("process.stop", {"process_id": process_id}, "stop", "verify")
+            )
+            polled = registry.execute(
+                Action("process.poll", {"process_id": process_id}, "poll", "verify")
+            )
+            registry.close()
+
+        waited_payload = json.loads(waited.output)
+        stopped_payload = json.loads(stopped.output)
+        polled_payload = json.loads(polled.output)
+        self.assertTrue(waited.succeeded)
+        self.assertTrue(waited_payload["timed_out"])
+        self.assertEqual(waited_payload["status"], "running")
+        self.assertTrue(stopped.succeeded)
+        self.assertTrue(stopped_payload["was_running"])
+        self.assertEqual(polled_payload["status"], "exited")
+
+    def test_process_cleanup_stops_background_processes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(tmpdir)
+            start = registry.execute(
+                Action(
+                    "process.start",
+                    {
+                        "command": (
+                            f"{sys.executable} -c "
+                            "\"import time; print('cleanup', flush=True); time.sleep(30)\""
+                        )
+                    },
+                    "start long process",
+                    "verify",
+                )
+            )
+            process_id = json.loads(start.output)["process_id"]
+
+            registry.close()
+            polled = registry.execute(
+                Action("process.poll", {"process_id": process_id}, "poll", "verify")
+            )
+
+        self.assertEqual(json.loads(polled.output)["status"], "exited")
 
     def test_file_write_creates_overwrites_and_requires_workspace_text_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -694,6 +840,21 @@ class AutonomyNativeToolsTest(unittest.TestCase):
             "browser.navigate",
             {"url": "https://example.test"},
             "navigate",
+            "verify",
+            risk_level=RiskLevel.MEDIUM,
+        )
+
+        allowed, reason = policy.authorize(action, interactive=False)
+
+        self.assertFalse(allowed)
+        self.assertIn("approval required", reason)
+
+    def test_process_start_requires_approval_in_non_interactive_mode(self):
+        policy = ApprovalPolicy(prompt=lambda message: True)
+        action = Action(
+            "process.start",
+            {"command": "python3.13 -m http.server 8000"},
+            "start server",
             "verify",
             risk_level=RiskLevel.MEDIUM,
         )

@@ -31,9 +31,16 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
     ToolsetDefinition("image_gen", "Image generation tools."),
     ToolsetDefinition(
         "terminal",
-        "Terminal command execution tools.",
+        "Terminal command execution and process management tools.",
         "implemented",
-        ("shell.execute",),
+        (
+            "shell.execute",
+            "process.start",
+            "process.poll",
+            "process.log",
+            "process.wait",
+            "process.stop",
+        ),
     ),
     ToolsetDefinition(
         "file",

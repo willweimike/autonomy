@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .browser_tools import BrowserController, browser_tools_available, register_browser_tools
 from .models import Action, ActionIntent, Observation, RiskLevel
+from .process_tools import ProcessManager, register_process_tools
 from .toolsets import ToolsetConfiguration
 from .web_tools import register_web_tools
 
@@ -661,6 +662,9 @@ def build_local_tool_registry(
         default_risk=RiskLevel.LOW,
         side_effects=("command-dependent",),
     )
+    process_manager = ProcessManager(root)
+    register_process_tools(registry, process_manager)
+    registry.register_cleanup(process_manager.close)
     register_web_tools(registry)
     browser_controller = BrowserController()
     register_browser_tools(

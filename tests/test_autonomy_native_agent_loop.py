@@ -399,6 +399,72 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         )
         self.assertFalse(approval["payload"]["allowed"])
 
+    def test_non_interactive_mode_denies_process_start_without_execution(self):
+        self.registry = build_local_tool_registry(self.tmpdir.name)
+        root = Path(self.tmpdir.name)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="process.start",
+                        arguments={
+                            "command": (
+                                "python3.13 -c "
+                                "\"from pathlib import Path; Path('started.txt').write_text('yes')\""
+                            )
+                        },
+                        purpose="start a background command",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model).run("start a process", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.APPROVAL_DENIED)
+        self.assertFalse((root / "started.txt").exists())
+        journal = self.store.inspect_run(result.run_id)
+        approval = next(
+            event for event in journal["events"] if event["event_type"] == "approval_decision"
+        )
+        selected = next(
+            event for event in journal["events"] if event["event_type"] == "action_selected"
+        )
+        self.assertFalse(approval["payload"]["allowed"])
+        self.assertEqual(selected["payload"]["tool"], "process.start")
+        self.assertEqual(selected["payload"]["risk_level"], "medium")
+
+    def test_agent_loop_executes_approved_process_start_through_gateway(self):
+        self.registry = build_local_tool_registry(self.tmpdir.name)
+        approval = ApprovalPolicy(prompt=lambda message: "process.start" in message)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="process.start",
+                        arguments={
+                            "command": "python3.13 -c \"print('agent-process', flush=True)\"",
+                            "_goal_achieving": True,
+                        },
+                        purpose="start a short background command",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model, approval=approval).run("start a process", interactive=True)
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        journal = self.store.inspect_run(result.run_id)
+        observation = next(
+            event for event in journal["events"] if event["event_type"] == "observation"
+        )
+        selected = next(
+            event for event in journal["events"] if event["event_type"] == "action_selected"
+        )
+        self.assertEqual(selected["payload"]["tool"], "process.start")
+        self.assertIn("process_started:", observation["payload"]["evidence"][0])
+
     def test_agent_loop_executes_approved_file_write_through_gateway(self):
         self.registry = build_local_tool_registry(self.tmpdir.name)
         approval = ApprovalPolicy(prompt=lambda message: "filesystem.write" in message)
