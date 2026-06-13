@@ -21,6 +21,20 @@ from autonomy.tools import ToolRegistry
 
 
 class AutonomyNativeToolsTest(unittest.TestCase):
+    def test_tool_modules_are_grouped_under_tools_package(self):
+        import autonomy.browser_tools as browser_tools
+        import autonomy.process_tools as process_tools
+        import autonomy.web_tools as web_tools
+        import autonomy.tools as tools_package
+        import autonomy.tools.toolsets.browser as browser_toolset
+        import autonomy.tools.toolsets.process as process_toolset
+        import autonomy.tools.toolsets.web as web_toolset
+
+        self.assertTrue(Path(tools_package.__file__).match("*/autonomy/tools/__init__.py"))
+        self.assertIs(browser_tools.BrowserController, browser_toolset.BrowserController)
+        self.assertIs(process_tools.ProcessManager, process_toolset.ProcessManager)
+        self.assertIs(web_tools.register_web_tools, web_toolset.register_web_tools)
+
     def test_local_read_list_search_and_safe_shell_tools(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

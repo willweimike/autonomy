@@ -56,7 +56,7 @@ python3.13 -m autonomy recipes list
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled code-editing process-management web-research browser-navigation website-inspection
+python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation web-research browser-navigation website-inspection
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -158,6 +158,17 @@ Hermes-like toolsets such as `memory`, `delegate`, `cronjob`, and
 Enabling a toolset only controls which implemented and available tools are
 visible to planning; it does not grant extra permissions or bypass
 `ActionGateway`.
+
+Tool implementation code is grouped under `autonomy/tools/`:
+
+- `autonomy/tools/registry.py`: `ToolSpec`, `ToolRegistry`, and `ApprovalPolicy`
+- `autonomy/tools/local.py`: local registry assembly plus file/search/shell tools
+- `autonomy/tools/toolsets/`: toolset-specific implementations such as
+  `web`, `browser`, and `process`
+
+The legacy modules `autonomy.browser_tools`, `autonomy.process_tools`, and
+`autonomy.web_tools` are compatibility shims that re-export the implementations
+from `autonomy/tools/toolsets/`.
 
 The first implemented local software-engineering tools are:
 
@@ -267,11 +278,22 @@ Initial global skills can be installed under `~/.autonomy/skills/`:
 - `read-only-code-review`
 - `code-editing`
 - `process-management`
+- `systematic-debugging`
+- `test-driven-development`
+- `technical-spike`
+- `api-debugging`
+- `codebase-documentation`
 
-Code editing and web/browser planning skills can be installed from bundled templates:
+Bundled Procedure Skills are Autonomy-native workflow guidance, adapted from
+Hermes as an engineering reference without importing Hermes runtime or skill
+files. Bundled skill sources live under
+`autonomy/bundled_skills/<skill-name>/SKILL.md`; add a new bundled skill by
+creating that directory and matching the YAML frontmatter `name` to the
+directory name. Code editing, process, software-engineering, and web/browser
+planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled code-editing process-management web-research browser-navigation website-inspection
+autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation web-research browser-navigation website-inspection
 ```
 
 These skills require the corresponding enabled and available tools before they

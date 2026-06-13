@@ -2,6 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from autonomy.bundled_procedure_skills import (
+    BUNDLED_PROCEDURE_SKILLS,
+    BUNDLED_SKILLS_DIR,
+    _load_bundled_procedure_skills,
+    bundled_skill_names,
+)
 from autonomy import (
     AutonomyStore,
     ProcedureSkillDraft,
@@ -147,12 +153,32 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
 
     def test_install_bundled_web_browser_skills_and_filter_by_available_tools(self):
         installed = self.library.install_bundled(
-            ["code-editing", "web-research", "browser-navigation", "process-management"]
+            [
+                "code-editing",
+                "web-research",
+                "browser-navigation",
+                "process-management",
+                "systematic-debugging",
+                "test-driven-development",
+                "technical-spike",
+                "api-debugging",
+                "codebase-documentation",
+            ]
         )
 
         self.assertEqual(
             [summary.name for summary in installed],
-            ["code-editing", "web-research", "browser-navigation", "process-management"],
+            [
+                "code-editing",
+                "web-research",
+                "browser-navigation",
+                "process-management",
+                "systematic-debugging",
+                "test-driven-development",
+                "technical-spike",
+                "api-debugging",
+                "codebase-documentation",
+            ],
         )
         web_only = self.library.index({"web.fetch", "web.extract"})
         code_tools = {
@@ -182,16 +208,151 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "process.wait",
             "process.stop",
         }
+        debugging_tools = {
+            "filesystem.read",
+            "filesystem.search_files",
+            "shell.execute",
+        }
+        editing_tools = {
+            "filesystem.read",
+            "filesystem.write",
+            "filesystem.patch",
+            "filesystem.search_files",
+            "shell.execute",
+        }
+        api_tools = {
+            "web.fetch",
+            "web.extract",
+            "shell.execute",
+        }
+        documentation_tools = {
+            "filesystem.read",
+            "filesystem.write",
+            "filesystem.search_files",
+            "shell.execute",
+        }
         code_only = self.library.index(code_tools)
         browser_only = self.library.index(browser_tools)
         process_only = self.library.index(process_tools)
+        debugging_only = self.library.index(debugging_tools)
+        editing_only = self.library.index(editing_tools)
+        api_only = self.library.index(api_tools)
+        documentation_only = self.library.index(documentation_tools)
 
-        self.assertEqual([summary.name for summary in code_only], ["code-editing"])
+        self.assertEqual(
+            [summary.name for summary in code_only],
+            [
+                "code-editing",
+                "codebase-documentation",
+                "systematic-debugging",
+                "test-driven-development",
+            ],
+        )
         self.assertEqual([summary.name for summary in web_only], ["web-research"])
         self.assertEqual([summary.name for summary in browser_only], ["browser-navigation"])
         self.assertEqual([summary.name for summary in process_only], ["process-management"])
+        self.assertEqual([summary.name for summary in debugging_only], ["systematic-debugging"])
+        self.assertIn("test-driven-development", [summary.name for summary in editing_only])
+        self.assertEqual([summary.name for summary in api_only], ["api-debugging", "web-research"])
+        self.assertIn(
+            "codebase-documentation",
+            [summary.name for summary in documentation_only],
+        )
         with self.assertRaises(FileExistsError):
             self.library.install_bundled(["web-research"])
+
+    def test_install_bundled_all_includes_software_engineering_skill_pack(self):
+        installed = self.library.install_bundled()
+        installed_names = {summary.name for summary in installed}
+
+        self.assertTrue(
+            {
+                "systematic-debugging",
+                "test-driven-development",
+                "technical-spike",
+                "api-debugging",
+                "codebase-documentation",
+            }.issubset(installed_names)
+        )
+
+    def test_bundled_skill_names_are_loaded_from_skill_files(self):
+        skill_files = sorted(BUNDLED_SKILLS_DIR.glob("*/SKILL.md"))
+        file_names = tuple(sorted(path.parent.name for path in skill_files))
+
+        self.assertEqual(bundled_skill_names(), file_names)
+
+    def test_bundled_skill_files_parse_with_existing_parser(self):
+        for name, content in BUNDLED_PROCEDURE_SKILLS.items():
+            with self.subTest(skill=name):
+                parsed = self.library._parse_content(
+                    content,
+                    source="global",
+                    path=BUNDLED_SKILLS_DIR / name / "SKILL.md",
+                )
+
+                self.assertEqual(parsed.summary.name, name)
+
+    def test_bundled_skill_directory_must_match_frontmatter_name(self):
+        bundled_root = Path(self.tmpdir.name) / "bundled"
+        write_skill(bundled_root, "actual-directory", "wrong name")
+        skill_file = bundled_root / "actual-directory" / "SKILL.md"
+        skill_file.write_text(
+            skill_file.read_text(encoding="utf-8").replace(
+                "name: actual-directory",
+                "name: frontmatter-name",
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "directory name must match"):
+            _load_bundled_procedure_skills(bundled_root)
+
+    def test_software_engineering_skill_pack_content_invariants(self):
+        installed = self.library.install_bundled(
+            [
+                "systematic-debugging",
+                "test-driven-development",
+                "technical-spike",
+                "api-debugging",
+                "codebase-documentation",
+            ]
+        )
+        available_tools = {
+            "filesystem.read",
+            "filesystem.write",
+            "filesystem.patch",
+            "filesystem.search_files",
+            "web.fetch",
+            "web.extract",
+            "shell.execute",
+            "process.start",
+            "process.poll",
+            "process.log",
+            "process.wait",
+            "process.stop",
+        }
+
+        for summary in installed:
+            with self.subTest(skill=summary.name):
+                skill = self.library.view(summary.name, available_tools)
+                self.assertIn("Workflow:", skill.body)
+                self.assertIn("Tool use rules:", skill.body)
+                self.assertIn("Pitfalls:", skill.body)
+                self.assertIn("Outcome checks:", skill.body)
+                self.assertIn("guidance only", skill.body)
+
+        self.assertIn(
+            "root-cause hypothesis",
+            self.library.view("systematic-debugging", available_tools).body,
+        )
+        self.assertIn(
+            "RED -> GREEN -> REFACTOR",
+            self.library.view("test-driven-development", available_tools).body,
+        )
+        self.assertIn(
+            "production implementation",
+            self.library.view("technical-spike", available_tools).body,
+        )
 
     def test_invalid_skill_and_path_escape_are_rejected(self):
         invalid = self.global_skills / "invalid"
