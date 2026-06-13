@@ -375,6 +375,91 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(result.termination, TerminationReason.APPROVAL_DENIED)
         self.assertEqual(self.executions, [])
 
+    def test_non_interactive_mode_denies_file_write_without_modifying_workspace(self):
+        self.registry = build_local_tool_registry(self.tmpdir.name)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="filesystem.write",
+                        arguments={"path": "created.txt", "content": "nope\n"},
+                        purpose="create file",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model).run("create a file", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.APPROVAL_DENIED)
+        self.assertFalse((Path(self.tmpdir.name) / "created.txt").exists())
+        journal = self.store.inspect_run(result.run_id)
+        approval = next(
+            event for event in journal["events"] if event["event_type"] == "approval_decision"
+        )
+        self.assertFalse(approval["payload"]["allowed"])
+
+    def test_agent_loop_executes_approved_file_write_through_gateway(self):
+        self.registry = build_local_tool_registry(self.tmpdir.name)
+        approval = ApprovalPolicy(prompt=lambda message: "filesystem.write" in message)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="filesystem.write",
+                        arguments={
+                            "path": "created.txt",
+                            "content": "hello\n",
+                            "_goal_achieving": True,
+                        },
+                        purpose="create a workspace text file",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model, approval=approval).run("create a file", interactive=True)
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        self.assertEqual((Path(self.tmpdir.name) / "created.txt").read_text(encoding="utf-8"), "hello\n")
+        journal = self.store.inspect_run(result.run_id)
+        selected = next(
+            event for event in journal["events"] if event["event_type"] == "action_selected"
+        )
+        self.assertEqual(selected["payload"]["tool"], "filesystem.write")
+        self.assertEqual(selected["payload"]["risk_level"], "medium")
+
+    def test_agent_loop_blocks_failed_file_patch_after_observation(self):
+        root = Path(self.tmpdir.name)
+        (root / "sample.txt").write_text("alpha\n", encoding="utf-8")
+        self.registry = build_local_tool_registry(root)
+        approval = ApprovalPolicy(prompt=lambda message: True)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="filesystem.patch",
+                        arguments={
+                            "path": "sample.txt",
+                            "old_string": "missing",
+                            "new_string": "replacement",
+                        },
+                        purpose="patch text",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model, approval=approval).run("patch a file", interactive=True)
+
+        self.assertEqual(result.termination, TerminationReason.BLOCKED)
+        self.assertEqual((root / "sample.txt").read_text(encoding="utf-8"), "alpha\n")
+        journal = self.store.inspect_run(result.run_id)
+        observation = next(
+            event for event in journal["events"] if event["event_type"] == "observation"
+        )
+        self.assertIn("old_string was not found", observation["payload"]["error"])
+
     def test_agent_loop_exposes_max_steps_termination(self):
         result = self.agent_loop(
             SequenceModel([[candidate(nonce=1)], [candidate(nonce=2)]])

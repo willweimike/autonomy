@@ -39,7 +39,13 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
         "file",
         "Workspace file read, list, and manipulation tools.",
         "implemented",
-        ("filesystem.read", "filesystem.list"),
+        (
+            "filesystem.read",
+            "filesystem.list",
+            "filesystem.write",
+            "filesystem.patch",
+            "filesystem.search_files",
+        ),
     ),
     ToolsetDefinition(
         "browser",

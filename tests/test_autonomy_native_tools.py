@@ -64,7 +64,15 @@ class AutonomyNativeToolsTest(unittest.TestCase):
 
         self.assertEqual(
             sorted(registry.names),
-            ["filesystem.list", "filesystem.read", "search.text", "shell.execute"],
+            [
+                "filesystem.list",
+                "filesystem.patch",
+                "filesystem.read",
+                "filesystem.search_files",
+                "filesystem.write",
+                "search.text",
+                "shell.execute",
+            ],
         )
 
     def test_disabled_toolset_is_not_available(self):
@@ -100,6 +108,146 @@ class AutonomyNativeToolsTest(unittest.TestCase):
 
         self.assertNotIn("shell.execute", registry.names)
         self.assertIn("filesystem.read", registry.names)
+
+    def test_file_write_creates_overwrites_and_requires_workspace_text_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            registry = build_local_tool_registry(root)
+
+            created = registry.execute(
+                Action(
+                    "filesystem.write",
+                    {"path": "nested/sample.txt", "content": "first\n"},
+                    "write",
+                    "verify",
+                )
+            )
+            overwritten = registry.execute(
+                Action(
+                    "filesystem.write",
+                    {"path": "nested/sample.txt", "content": "second\n"},
+                    "write",
+                    "verify",
+                )
+            )
+            escape_reason = registry.rejection_reason(
+                ActionIntent(
+                    "filesystem.write",
+                    {"path": "../outside.txt", "content": "no"},
+                    "escape",
+                )
+            )
+            binary_reason = registry.rejection_reason(
+                ActionIntent(
+                    "filesystem.write",
+                    {"path": "image.png", "content": "no"},
+                    "binary",
+                )
+            )
+            final_content = (root / "nested" / "sample.txt").read_text(encoding="utf-8")
+
+        created_payload = json.loads(created.output)
+        overwritten_payload = json.loads(overwritten.output)
+        self.assertTrue(created.succeeded)
+        self.assertTrue(created_payload["created"])
+        self.assertFalse(overwritten_payload["created"])
+        self.assertEqual(final_content, "second\n")
+        self.assertIn("path escapes workspace", escape_reason)
+        self.assertIn("binary-like file extension", binary_reason)
+
+    def test_file_patch_replaces_unique_or_all_matches_and_preserves_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            path = root / "sample.txt"
+            path.write_text("alpha\nbeta\nbeta\n", encoding="utf-8")
+            registry = build_local_tool_registry(root)
+
+            missing = registry.execute(
+                Action(
+                    "filesystem.patch",
+                    {"path": "sample.txt", "old_string": "gamma", "new_string": "delta"},
+                    "patch",
+                    "verify",
+                )
+            )
+            ambiguous = registry.execute(
+                Action(
+                    "filesystem.patch",
+                    {"path": "sample.txt", "old_string": "beta", "new_string": "BETA"},
+                    "patch",
+                    "verify",
+                )
+            )
+            unique = registry.execute(
+                Action(
+                    "filesystem.patch",
+                    {"path": "sample.txt", "old_string": "alpha", "new_string": "ALPHA"},
+                    "patch",
+                    "verify",
+                )
+            )
+            replace_all = registry.execute(
+                Action(
+                    "filesystem.patch",
+                    {
+                        "path": "sample.txt",
+                        "old_string": "beta",
+                        "new_string": "BETA",
+                        "replace_all": True,
+                    },
+                    "patch",
+                    "verify",
+                )
+            )
+            final_content = path.read_text(encoding="utf-8")
+
+        unique_payload = json.loads(unique.output)
+        replace_all_payload = json.loads(replace_all.output)
+        self.assertFalse(missing.succeeded)
+        self.assertFalse(ambiguous.succeeded)
+        self.assertIn("not unique", ambiguous.error)
+        self.assertIn("-alpha", unique_payload["diff"])
+        self.assertEqual(replace_all_payload["replacements"], 2)
+        self.assertEqual(final_content, "ALPHA\nBETA\nBETA\n")
+
+    def test_filesystem_search_files_content_and_filename_modes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / ".git").mkdir()
+            (root / "src" / "app.py").write_text("needle = 1\n", encoding="utf-8")
+            (root / "src" / "notes.md").write_text("needle docs\n", encoding="utf-8")
+            (root / ".git" / "ignored.py").write_text("needle hidden\n", encoding="utf-8")
+            registry = build_local_tool_registry(root)
+
+            content = registry.execute(
+                Action(
+                    "filesystem.search_files",
+                    {
+                        "pattern": "needle",
+                        "path": ".",
+                        "file_glob": "*.py",
+                        "limit": 10,
+                    },
+                    "search",
+                    "verify",
+                )
+            )
+            files = registry.execute(
+                Action(
+                    "filesystem.search_files",
+                    {"pattern": "*.md", "target": "files", "path": "."},
+                    "find",
+                    "verify",
+                )
+            )
+            empty_reason = registry.rejection_reason(
+                ActionIntent("filesystem.search_files", {"pattern": ""}, "bad search")
+            )
+
+        self.assertEqual(content.output, "src/app.py:1:needle = 1")
+        self.assertEqual(files.output, "src/notes.md")
+        self.assertIn("pattern must not be empty", empty_reason)
 
     def test_web_tools_fetch_and_extract_local_http(self):
         class Headers:

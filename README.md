@@ -56,7 +56,7 @@ python3.13 -m autonomy recipes list
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled web-research browser-navigation website-inspection
+python3.13 -m autonomy skills install-bundled code-editing web-research browser-navigation website-inspection
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -163,6 +163,9 @@ The first implemented local software-engineering tools are:
 
 - `filesystem.read`
 - `filesystem.list`
+- `filesystem.write`
+- `filesystem.patch`
+- `filesystem.search_files`
 - `search.text`
 - `shell.execute`
 
@@ -201,9 +204,11 @@ selectors from this inventory instead of guessing selectors from page text.
 selectors. `browser.console` returns console output and JavaScript page errors,
 or evaluates a small diagnostic JavaScript expression in the current page.
 
-Read-only local and web fetch actions are low risk. Browser actions are medium
-risk. Unknown shell commands require interactive approval and are rejected in
-non-interactive mode.
+Read-only local and web fetch actions are low risk. File write/patch actions
+and browser actions are medium risk. Unknown shell commands require interactive
+approval and are rejected in non-interactive mode. File editing tools are
+workspace-only and text-only; use them instead of shell heredocs or in-place
+shell edits.
 
 Model-generated tool use is represented as an `ActionIntent`:
 
@@ -248,11 +253,12 @@ Initial global skills can be installed under `~/.autonomy/skills/`:
 - `test-diagnosis`
 - `implementation-status-audit`
 - `read-only-code-review`
+- `code-editing`
 
-Web/browser planning skills can be installed from bundled templates:
+Code editing and web/browser planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled web-research browser-navigation website-inspection
+autonomy skills install-bundled code-editing web-research browser-navigation website-inspection
 ```
 
 These skills require the corresponding enabled and available tools before they

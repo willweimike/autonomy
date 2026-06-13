@@ -146,13 +146,23 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         self.assertEqual(self.library.list_candidates(), [])
 
     def test_install_bundled_web_browser_skills_and_filter_by_available_tools(self):
-        installed = self.library.install_bundled(["web-research", "browser-navigation"])
+        installed = self.library.install_bundled(
+            ["code-editing", "web-research", "browser-navigation"]
+        )
 
         self.assertEqual(
             [summary.name for summary in installed],
-            ["web-research", "browser-navigation"],
+            ["code-editing", "web-research", "browser-navigation"],
         )
         web_only = self.library.index({"web.fetch", "web.extract"})
+        code_tools = {
+            "filesystem.read",
+            "filesystem.list",
+            "filesystem.write",
+            "filesystem.patch",
+            "filesystem.search_files",
+            "shell.execute",
+        }
         browser_tools = {
             "browser.navigate",
             "browser.snapshot",
@@ -164,8 +174,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "browser.get_images",
             "browser.console",
         }
+        code_only = self.library.index(code_tools)
         browser_only = self.library.index(browser_tools)
 
+        self.assertEqual([summary.name for summary in code_only], ["code-editing"])
         self.assertEqual([summary.name for summary in web_only], ["web-research"])
         self.assertEqual([summary.name for summary in browser_only], ["browser-navigation"])
         with self.assertRaises(FileExistsError):
