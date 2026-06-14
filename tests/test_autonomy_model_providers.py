@@ -78,7 +78,7 @@ class AutonomyModelProviderTest(unittest.TestCase):
         with self.assertRaisesRegex(ProviderConfigurationError, "positive integer"):
             configuration.validate()
 
-    def test_create_provider_uses_global_configuration_without_exposing_secret(self):
+    def test_create_provider_uses_workspace_configuration_without_exposing_secret(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ModelConfigStore(Path(tmpdir))
             configuration = ModelConfiguration(
@@ -96,7 +96,7 @@ class AutonomyModelProviderTest(unittest.TestCase):
                 "model_provider": "openai-api",
                 "model": "gpt-test",
                 "endpoint": "https://api.openai.com/v1",
-                "configuration_source": "global",
+                "configuration_source": "workspace",
             },
         )
         self.assertNotIn("secret-value", repr(provider.journal_context))

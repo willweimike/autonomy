@@ -143,14 +143,14 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
             "model_provider": "ollama",
             "model": "qwen2.5vl:7b",
             "endpoint": "http://127.0.0.1:11434/v1",
-            "configuration_source": "global",
+            "configuration_source": "workspace",
         }
 
         result = self.agent_loop(model).run("collect evidence", interactive=False)
 
         started = self.store.inspect_run(result.run_id)["events"][0]["payload"]
         self.assertEqual(started["model_provider"], "ollama")
-        self.assertEqual(started["configuration_source"], "global")
+        self.assertEqual(started["configuration_source"], "workspace")
         self.assertEqual(started["interface"], "run")
         self.assertNotIn("api_key", started)
 

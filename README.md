@@ -99,17 +99,17 @@ The system supports `ollama` and `openai-api`. Run `autonomy model setup` to
 choose a provider, endpoint, and model. Re-running setup is the only way to
 switch the global provider or model.
 
-Validated global configuration is stored under:
+Validated workspace configuration is stored under:
 
 ```text
-~/.autonomy/config.yaml  # active provider, endpoint, model, and timeout
-~/.autonomy/.env         # OpenAI API key, mode 0600
+<workspace>/.autonomy/config.yaml  # active provider, endpoint, model, and timeout
+<workspace>/.autonomy/.env         # OpenAI API key, mode 0600
 ```
 
-Live runs do not read legacy model environment variables and do not accept
-per-run provider or model overrides. `autonomy doctor` is the diagnostic entry
-point for configuration, credentials, endpoint reachability, and model
-availability.
+Live runs do not read legacy model environment variables, do not read
+`~/.autonomy` as fallback storage, and do not accept per-run provider or model
+overrides. `autonomy doctor` is the diagnostic entry point for configuration,
+credentials, endpoint reachability, and model availability.
 
 ### Ollama
 
@@ -128,10 +128,10 @@ Ollama's base URL must include `/v1`. The default is
 ## Toolsets
 
 Tool availability is controlled by a global Autonomy-native toolset catalog and
-configuration file:
+workspace configuration file:
 
 ```text
-~/.autonomy/tools.yaml
+<workspace>/.autonomy/tools.yaml
 ```
 
 The default enabled toolsets are:
@@ -260,17 +260,17 @@ Procedure Skills are governed `SKILL.md` documents that teach the model how to
 plan a class of task. They never execute tools, grant permission, bypass
 execution governance, or participate in outcome evaluation.
 
-The formal skill loader scans one global store:
+The formal skill loader scans one workspace store:
 
 ```text
-~/.autonomy/skills/
+<workspace>/.autonomy/skills/
 ```
 
 Each planning round filters skills by platform, required tools, and enabled
 state. The model chooses at most three summaries, and only those full documents
 are loaded for candidate generation.
 
-Initial global skills can be installed under `~/.autonomy/skills/`:
+Initial workspace skills can be installed under `<workspace>/.autonomy/skills/`:
 
 - `repository-orientation`
 - `test-diagnosis`
@@ -312,10 +312,10 @@ RecipeGraph/edge reliability layer has been removed; governance remains in
 
 Every run finishes with a lightweight `LearningLoop` review. Achieved runs
 with at least two successful outcomes may generate a `new_skill` candidate
-under `~/.autonomy/skill-candidates/`. Candidate documents are not scanned or
-used until a user approves them with `autonomy skills approve`. Rejected and
-approved candidates remain as audit artifacts and are hidden from the default
-candidate list.
+under `<workspace>/.autonomy/skill-candidates/`. Candidate documents are not
+scanned or used until a user approves them with `autonomy skills approve`.
+Rejected and approved candidates remain as audit artifacts and are hidden from
+the default candidate list.
 
 Model-generated Procedure Skills are always candidate-first. The model can
 draft a `SKILL.md` from a successful run, but it cannot approve or activate

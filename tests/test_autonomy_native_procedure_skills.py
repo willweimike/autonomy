@@ -64,14 +64,14 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def test_global_skill_store_is_only_formal_source(self):
+    def test_configured_skill_store_is_only_formal_source(self):
         write_skill(self.global_skills, "orientation", "global description")
         write_skill(self.workspace / "skills", "orientation", "workspace description")
 
         index = self.library.index(self.tools)
 
         self.assertEqual(len(index), 1)
-        self.assertEqual(index[0].source, "global")
+        self.assertEqual(index[0].source, "workspace")
         self.assertEqual(index[0].description, "global description")
 
     def test_required_tools_platform_and_disabled_state_filter_index(self):
@@ -107,7 +107,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         self.assertEqual(records["one"]["load_count"], 1)
         self.assertEqual(records["four"]["load_count"], 0)
 
-    def test_candidate_directory_is_global_not_scanned_and_approval_targets_global_store(self):
+    def test_candidate_directory_is_not_scanned_and_approval_targets_formal_store(self):
         candidate = self.library.write_candidate(
             ProcedureSkillDraft(
                 name="candidate-procedure",
@@ -126,7 +126,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         self.assertEqual(candidate["source_workspace"], str(self.workspace.resolve()))
         self.assertEqual(candidate["source_run_id"], "run-1")
         approved = self.library.approve_candidate(candidate["candidate_id"])
-        self.assertEqual(approved.summary.source, "global")
+        self.assertEqual(approved.summary.source, "workspace")
         self.assertTrue(
             (self.global_skills / "candidate-procedure" / "SKILL.md").is_file()
         )
@@ -286,7 +286,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             with self.subTest(skill=name):
                 parsed = self.library._parse_content(
                     content,
-                    source="global",
+                    source="workspace",
                     path=BUNDLED_SKILLS_DIR / name / "SKILL.md",
                 )
 

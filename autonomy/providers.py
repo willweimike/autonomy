@@ -107,7 +107,7 @@ class ModelConfigStore:
     OPENAI_API_KEY_NAME = "AUTONOMY_OPENAI_API_KEY"
 
     def __init__(self, config_dir: Path | None = None):
-        self.config_dir = (config_dir or Path.home() / ".autonomy").expanduser()
+        self.config_dir = (config_dir or Path.cwd() / ".autonomy").expanduser()
         self.config_path = self.config_dir / "config.yaml"
         self.env_path = self.config_dir / ".env"
 
@@ -259,7 +259,7 @@ class OpenAICompatibleProvider:
         base_url: str,
         timeout: int,
         *,
-        configuration_source: str = "global",
+        configuration_source: str = "workspace",
     ):
         if provider_id not in PROVIDER_SPECS and provider_id != "openai-compatible":
             raise ProviderConfigurationError(f"unsupported model provider: {provider_id}")
@@ -391,5 +391,5 @@ def create_provider(
         api_key=api_key,
         base_url=configuration.base_url,
         timeout=configuration.timeout,
-        configuration_source="global",
+        configuration_source="workspace",
     )

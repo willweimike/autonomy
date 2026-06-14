@@ -124,7 +124,7 @@ class ToolsetConfiguration:
 
 class ToolsetConfigStore:
     def __init__(self, config_dir: Path | None = None):
-        self.config_dir = (config_dir or Path.home() / ".autonomy").expanduser()
+        self.config_dir = (config_dir or Path.cwd() / ".autonomy").expanduser()
         self.config_path = self.config_dir / "tools.yaml"
 
     def load(self) -> ToolsetConfiguration:

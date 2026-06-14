@@ -13,6 +13,7 @@ import yaml
 
 from .bundled_procedure_skills import BUNDLED_PROCEDURE_SKILLS
 from .models import ProcedureSkill, ProcedureSkillDraft, ProcedureSkillSummary
+from .storage import workspace_autonomy_home
 from .store import AutonomyStore
 
 
@@ -34,7 +35,7 @@ class ProcedureSkillLibrary:
         candidates_dir: str | Path | None = None,
     ):
         self.workspace = Path(workspace).resolve()
-        autonomy_home = Path.home() / ".autonomy"
+        autonomy_home = workspace_autonomy_home(self.workspace)
         self.skills_dir = Path(skills_dir or autonomy_home / "skills").expanduser().resolve()
         self.candidates_dir = Path(
             candidates_dir or autonomy_home / "skill-candidates"
@@ -52,7 +53,7 @@ class ProcedureSkillLibrary:
         if not self.skills_dir.is_dir():
             return []
         for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
-            skill = self._read_skill(skill_file, self.skills_dir, "global")
+            skill = self._read_skill(skill_file, self.skills_dir, "workspace")
             summary = self.store.sync_procedure_skill(skill.summary)
             if not include_disabled and not summary.enabled:
                 continue
@@ -74,7 +75,7 @@ class ProcedureSkillLibrary:
             if name not in allowed or any(item.summary.name == name for item in selected):
                 continue
             summary = allowed[name]
-            skill = self._read_skill(Path(summary.path), self.skills_dir, "global")
+            skill = self._read_skill(Path(summary.path), self.skills_dir, "workspace")
             selected.append(skill)
             self.store.record_procedure_skill_loaded(name)
         return selected
@@ -90,7 +91,7 @@ class ProcedureSkillLibrary:
             return []
         skills: list[ProcedureSkill] = []
         for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
-            skill = self._read_skill(skill_file, self.skills_dir, "global")
+            skill = self._read_skill(skill_file, self.skills_dir, "workspace")
             summary = self.store.sync_procedure_skill(skill.summary)
             if include_disabled or summary.enabled:
                 skills.append(
@@ -115,7 +116,7 @@ class ProcedureSkillLibrary:
             content = BUNDLED_PROCEDURE_SKILLS[name]
             skill = self._parse_content(
                 content,
-                source="global",
+                source="workspace",
                 path=self.skills_dir / name / "SKILL.md",
             )
             destination = self.skills_dir / skill.summary.name / "SKILL.md"
@@ -123,7 +124,7 @@ class ProcedureSkillLibrary:
                 raise FileExistsError(f"procedure skill already exists: {destination}")
             destination.parent.mkdir(parents=True, exist_ok=False)
             destination.write_text(content, encoding="utf-8")
-            approved = self._read_skill(destination, self.skills_dir, "global")
+            approved = self._read_skill(destination, self.skills_dir, "workspace")
             self.store.sync_procedure_skill(approved.summary)
             installed.append(approved.summary)
         return installed
@@ -206,7 +207,7 @@ class ProcedureSkillLibrary:
             raise FileExistsError(f"procedure skill already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=False)
         shutil.copyfile(source, destination)
-        approved = self._read_skill(destination, self.skills_dir, "global")
+        approved = self._read_skill(destination, self.skills_dir, "workspace")
         self.store.sync_procedure_skill(approved.summary)
         metadata = self._candidate_metadata(candidate_id)
         metadata.update(
@@ -245,7 +246,7 @@ class ProcedureSkillLibrary:
         skill_path = skill_dir / "SKILL.md"
         if not skill_path.is_file():
             raise KeyError(f"unknown procedure skill: {name}")
-        self._read_skill(skill_path, self.skills_dir, "global")
+        self._read_skill(skill_path, self.skills_dir, "workspace")
         shutil.rmtree(skill_dir)
         self.store.delete_procedure_skill_record(name)
 
@@ -263,11 +264,11 @@ class ProcedureSkillLibrary:
             raise KeyError(f"unknown source procedure skill: {source_name}")
         if not target_path.is_file():
             raise KeyError(f"unknown target procedure skill: {target_name}")
-        source = self._read_skill(source_path, self.skills_dir, "global")
-        target = self._read_skill(target_path, self.skills_dir, "global")
+        source = self._read_skill(source_path, self.skills_dir, "workspace")
+        target = self._read_skill(target_path, self.skills_dir, "workspace")
         merged = self._parse_content(
             merged_content,
-            source="global",
+            source="workspace",
             path=target_path,
         )
         if merged.summary.name != target.summary.name:
@@ -280,7 +281,7 @@ class ProcedureSkillLibrary:
             raise ProcedureSkillError("merged skill must not expand platforms")
         del source
         target_path.write_text(merged.raw_content, encoding="utf-8")
-        approved = self._read_skill(target_path, self.skills_dir, "global")
+        approved = self._read_skill(target_path, self.skills_dir, "workspace")
         self.store.sync_procedure_skill(approved.summary)
         self.delete_skill(source_name)
         return approved
@@ -289,7 +290,7 @@ class ProcedureSkillLibrary:
         target_path = self._skill_dir(target_name) / "SKILL.md"
         merged = self._parse_content(
             merged_content,
-            source="global",
+            source="workspace",
             path=target_path,
         )
         if merged.summary.name != target_name:

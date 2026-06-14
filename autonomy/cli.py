@@ -37,6 +37,11 @@ from .providers import (
 from .recipes import RecipeEngine
 from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon, SkillCurator
+from .storage import (
+    migrate_legacy_storage_for_cli,
+    workspace_autonomy_home,
+    workspace_db_path,
+)
 from .store import AutonomyStore
 from .tools import ApprovalPolicy, build_local_tool_registry
 from .toolsets import (
@@ -48,15 +53,38 @@ from .outcome import ModelAssistedOutcomeEvaluator
 
 
 def default_db_path() -> Path:
-    return Path(os.environ.get("AUTONOMY_DB", "~/.autonomy/autonomy.db")).expanduser()
+    return Path(os.environ.get("AUTONOMY_DB", workspace_db_path())).expanduser()
 
 
-def default_model_config_dir() -> Path:
-    return Path.home() / ".autonomy"
+def default_model_config_dir(workspace: Path | None = None) -> Path:
+    return workspace_autonomy_home(workspace)
 
 
-def default_toolset_config_dir() -> Path:
-    return Path.home() / ".autonomy"
+def default_toolset_config_dir(workspace: Path | None = None) -> Path:
+    return workspace_autonomy_home(workspace)
+
+
+def _model_config_dir_for(workspace: Path) -> Path:
+    try:
+        return default_model_config_dir(workspace)
+    except TypeError:
+        return default_model_config_dir()
+
+
+def _toolset_config_dir_for(workspace: Path) -> Path:
+    try:
+        return default_toolset_config_dir(workspace)
+    except TypeError:
+        return default_toolset_config_dir()
+
+
+def _db_path_for(workspace: Path, explicit_db: Path | None) -> Path:
+    return explicit_db.expanduser() if explicit_db else workspace_db_path(workspace)
+
+
+def _prepare_workspace_storage(workspace: Path) -> None:
+    migrate_legacy_storage_for_cli(workspace)
+    workspace_autonomy_home(workspace).mkdir(parents=True, exist_ok=True)
 
 
 def build_agent_loop(
@@ -67,11 +95,11 @@ def build_agent_loop(
     tool_config_dir: Path | None = None,
 ) -> AgentLoop:
     store = AutonomyStore(db_path)
-    config_store = ModelConfigStore(config_dir or default_model_config_dir())
+    config_store = ModelConfigStore(config_dir or _model_config_dir_for(workspace))
     provider = create_provider(config_store.load(), config_store)
     model = AutonomyModel.from_provider(provider)
     procedure_skills = ProcedureSkillLibrary(workspace, store)
-    toolsets = ToolsetConfigStore(tool_config_dir or default_toolset_config_dir()).load()
+    toolsets = ToolsetConfigStore(tool_config_dir or _toolset_config_dir_for(workspace)).load()
     tools = build_local_tool_registry(workspace, toolsets)
     action_gateway = ActionGateway(
         tools=tools,
@@ -100,6 +128,7 @@ class SessionShell:
         db_path: Path,
         max_steps: int,
         config_dir: Path | None = None,
+        tool_config_dir: Path | None = None,
         input_func: Callable[[str], str] = input,
         output: TextIO = sys.stdout,
         agent_loop_factory: Callable[[Path, Path], AgentLoop] | None = None,
@@ -109,8 +138,8 @@ class SessionShell:
         self.workspace = workspace.resolve()
         self.db_path = db_path
         self.max_steps = max_steps
-        self.config_dir = config_dir or default_model_config_dir()
-        self.tool_config_dir = config_dir or default_toolset_config_dir()
+        self.config_dir = config_dir or _model_config_dir_for(self.workspace)
+        self.tool_config_dir = tool_config_dir or config_dir or _toolset_config_dir_for(self.workspace)
         self.input_func = input_func
         self.output = output
         self.agent_loop_factory = agent_loop_factory or self._build_agent_loop
@@ -471,7 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="autonomy",
         description="Start an interactive Autonomy session when no subcommand is provided.",
     )
-    parser.add_argument("--db", type=Path, default=default_db_path())
+    parser.add_argument("--db", type=Path, default=None)
     subparsers = parser.add_subparsers(dest="command", required=False)
 
     run = subparsers.add_parser("run")
@@ -628,6 +657,7 @@ def doctor(
     workspace: Path | None = None,
     toolset_store: ToolsetConfigStore | None = None,
 ) -> int:
+    workspace = (workspace or Path.cwd()).resolve()
     database_error = ""
     try:
         AutonomyStore(db_path)
@@ -639,7 +669,7 @@ def doctor(
         env_permissions_secure = config_store.env_permissions_secure()
     except OSError:
         env_permissions_secure = False
-    autonomy_home = Path.home() / ".autonomy"
+    autonomy_home = workspace_autonomy_home(workspace)
     skill_store_path = autonomy_home / "skills"
     candidate_store_path = autonomy_home / "skill-candidates"
     skill_store_writable = _directory_writable(skill_store_path)
@@ -651,7 +681,7 @@ def doctor(
     except ToolsetConfigurationError as exc:
         toolset_configuration = None
         toolset_error = str(exc)
-    full_registry = build_local_tool_registry(workspace or Path.cwd())
+    full_registry = build_local_tool_registry(workspace)
     registry = (
         full_registry.filter_by_toolsets(toolset_configuration)
         if toolset_configuration
@@ -667,7 +697,8 @@ def doctor(
         "candidate_store_writable": candidate_store_writable,
         "model_configured": False,
         "configuration_valid": False,
-        "configuration_source": "global",
+        "configuration_source": "workspace",
+        "autonomy_home": str(autonomy_home),
         "provider": "",
         "model": "",
         "endpoint": "",
@@ -748,20 +779,28 @@ def _directory_writable(path: Path) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config_store = ModelConfigStore(default_model_config_dir())
+    workspace = _workspace_for_args(args)
+    _prepare_workspace_storage(workspace)
+    db_path = _db_path_for(workspace, args.db)
+    config_dir = _model_config_dir_for(workspace)
+    tool_config_dir = _toolset_config_dir_for(workspace)
+    config_store = ModelConfigStore(config_dir)
+    toolset_store = ToolsetConfigStore(tool_config_dir)
     if args.command is None:
         return SessionShell(
-            workspace=Path.cwd(),
-            db_path=args.db,
+            workspace=workspace,
+            db_path=db_path,
             max_steps=12,
-            config_dir=default_model_config_dir(),
+            config_dir=config_dir,
+            tool_config_dir=tool_config_dir,
         ).run()
     if args.command == "chat":
         return SessionShell(
-            workspace=args.workspace,
-            db_path=args.db,
+            workspace=workspace,
+            db_path=db_path,
             max_steps=args.max_steps,
-            config_dir=default_model_config_dir(),
+            config_dir=config_dir,
+            tool_config_dir=tool_config_dir,
         ).run()
     if args.command == "model":
         try:
@@ -771,8 +810,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if args.command == "doctor":
-        return doctor(args.db, config_store, toolset_store=ToolsetConfigStore(default_toolset_config_dir()))
-    store = AutonomyStore(args.db)
+        return doctor(db_path, config_store, workspace, toolset_store=toolset_store)
+    store = AutonomyStore(db_path)
     if args.command == "inspect":
         print(json.dumps(store.inspect_run(args.run_id), indent=2, sort_keys=True))
         return 0
@@ -786,10 +825,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "skills":
         registry = build_local_tool_registry(
-            args.workspace.resolve(),
-            ToolsetConfigStore(default_toolset_config_dir()).load(),
+            workspace,
+            toolset_store.load(),
         )
-        library = ProcedureSkillLibrary(args.workspace.resolve(), store)
+        library = ProcedureSkillLibrary(workspace, store)
         try:
             if args.skills_command == "list":
                 print(
@@ -820,10 +859,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"skill error: {exc}", file=sys.stderr)
             return 2
     if args.command == "tools":
-        toolset_store = ToolsetConfigStore(default_toolset_config_dir())
         try:
             if args.tools_command in {"list", "status"}:
-                registry = build_local_tool_registry(Path.cwd())
+                registry = build_local_tool_registry(workspace)
                 print(
                     json.dumps(
                         toolset_catalog_status(
@@ -856,10 +894,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     try:
         agent_loop = build_agent_loop(
-            args.workspace.resolve(),
-            args.db,
-            config_dir=default_model_config_dir(),
-            tool_config_dir=default_toolset_config_dir(),
+            workspace,
+            db_path,
+            config_dir=config_dir,
+            tool_config_dir=tool_config_dir,
         )
     except (ProviderConfigurationError, ToolsetConfigurationError, ValueError) as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
@@ -872,3 +910,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(json.dumps(jsonable(result), indent=2, sort_keys=True))
     return 0 if result.termination.value == "achieved" else 2
+
+
+def _workspace_for_args(args) -> Path:
+    if args.command in {"chat", "run", "skills"}:
+        return args.workspace.expanduser().resolve()
+    return Path.cwd().resolve()

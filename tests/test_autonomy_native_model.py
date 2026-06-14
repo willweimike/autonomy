@@ -196,7 +196,7 @@ class AutonomyNativeModelTest(unittest.TestCase):
                 tags=(),
                 platforms=(),
                 requires_tools=(),
-                source="global",
+                source="workspace",
                 path=f"/{name}/SKILL.md",
                 file_hash=name,
             )

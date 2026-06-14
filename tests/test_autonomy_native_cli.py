@@ -358,12 +358,9 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertIn("bye", output.getvalue())
 
     def test_session_shell_lists_skills_and_recipes(self):
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            patch("autonomy.procedure_skills.Path.home", return_value=Path(tmpdir) / "home"),
-        ):
+        with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            skill_dir = Path(tmpdir) / "home" / ".autonomy" / "skills" / "cli-skill"
+            skill_dir = workspace / ".autonomy" / "skills" / "cli-skill"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(
                 """---
@@ -422,10 +419,7 @@ requires_tools: [filesystem.read]
             self.assertFalse(recipe.enabled)
 
     def test_session_shell_prompts_for_candidate_skill_approval(self):
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            patch("autonomy.procedure_skills.Path.home", return_value=Path(tmpdir) / "home"),
-        ):
+        with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()
             db_path = Path(tmpdir) / "chat.db"
@@ -473,8 +467,7 @@ requires_tools: [filesystem.read]
             ):
                 result = shell.run()
             approved_exists = (
-                Path(tmpdir)
-                / "home"
+                workspace
                 / ".autonomy"
                 / "skills"
                 / "session-procedure"
@@ -860,10 +853,7 @@ requires_tools: [filesystem.read]
         self.assertIn("unknown toolset", error.getvalue())
 
     def test_skills_cli_lists_views_and_approves_candidates(self):
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            patch("autonomy.procedure_skills.Path.home", return_value=Path(tmpdir) / "home"),
-        ):
+        with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()
             db_path = Path(tmpdir) / "skills.db"
@@ -958,10 +948,7 @@ requires_tools: [filesystem.read]
             self.assertEqual(json.loads(output.getvalue())["status"], "rejected")
 
     def test_skills_cli_installs_bundled_web_browser_skills(self):
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            patch("autonomy.procedure_skills.Path.home", return_value=Path(tmpdir) / "home"),
-        ):
+        with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()
             db_path = Path(tmpdir) / "skills.db"
@@ -987,8 +974,7 @@ requires_tools: [filesystem.read]
             )
             self.assertTrue(
                 (
-                    Path(tmpdir)
-                    / "home"
+                    workspace
                     / ".autonomy"
                     / "skills"
                     / "web-research"
