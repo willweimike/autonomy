@@ -196,6 +196,7 @@ class ConversationResponse:
     reply: str
     conversation_context: str = ""
     candidate_skills: tuple[dict[str, Any], ...] = ()
+    action_recipe_candidates: tuple[dict[str, Any], ...] = ()
     decision: ConversationDecision | None = None
 
 

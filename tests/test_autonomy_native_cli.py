@@ -18,6 +18,7 @@ from autonomy import (
     ModelConfiguration,
     ProcedureSkillDraft,
     ProcedureSkillLibrary,
+    RecipeStatus,
     RunResult,
     TerminationReason,
 )
@@ -390,7 +391,14 @@ requires_tools: [filesystem.read]
                 )
             )
             output = io.StringIO()
-            inputs = iter(["/skills", "/recipes", "/exit"])
+            inputs = iter([
+                "/skills",
+                "/recipes",
+                "/recipes list",
+                "/recipes activate recipe",
+                "/recipes disable recipe",
+                "/exit",
+            ])
             shell = SessionShell(
                 workspace=workspace,
                 db_path=workspace / "chat.db",
@@ -404,9 +412,14 @@ requires_tools: [filesystem.read]
             )
 
             shell.run()
+            recipe = AutonomyStore(workspace / "chat.db").list_recipes()[0]
 
-        self.assertIn('"name": "cli-skill"', output.getvalue())
-        self.assertIn('"id": "recipe"', output.getvalue())
+            self.assertIn('"name": "cli-skill"', output.getvalue())
+            self.assertIn('"id": "recipe"', output.getvalue())
+            self.assertIn("activated: recipe", output.getvalue())
+            self.assertIn("disabled: recipe", output.getvalue())
+            self.assertEqual(recipe.status, RecipeStatus.ACTIVE)
+            self.assertFalse(recipe.enabled)
 
     def test_session_shell_prompts_for_candidate_skill_approval(self):
         with (
@@ -473,6 +486,141 @@ requires_tools: [filesystem.read]
         self.assertIn("# Session", output.getvalue())
         self.assertIn("approved: session-procedure", output.getvalue())
         self.assertTrue(approved_exists)
+
+    def test_session_shell_prompts_for_candidate_recipe_activation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            db_path = Path(tmpdir) / "chat.db"
+            store = AutonomyStore(db_path)
+            recipe = ActionRecipe(
+                "candidate-recipe",
+                "inspect repository",
+                "Observed in successful outcomes.",
+                {
+                    "tool": "filesystem.read",
+                    "arguments": {"path": "README.md"},
+                    "purpose": "read README",
+                },
+                "read README",
+                "evaluate outcome",
+                evidence_count=2,
+            )
+            store.upsert_recipe(recipe)
+            output = io.StringIO()
+            inputs = iter(["inspect repository", "v", "y", "/exit"])
+            response = ConversationResponse(
+                session_id="session",
+                user_turn_id="user",
+                assistant_turn_id="assistant",
+                run_result=RunResult(
+                    "run-1",
+                    "inspect repository",
+                    TerminationReason.ACHIEVED,
+                    1,
+                    "done",
+                ),
+                reply="run_id: run-1\ntermination: achieved\nsteps: 1\nreason: done",
+                action_recipe_candidates=(
+                    {
+                        "id": recipe.id,
+                        "intent": recipe.intent,
+                        "preconditions": recipe.preconditions,
+                        "action_template": recipe.action_template,
+                        "expected_effect": recipe.expected_effect,
+                        "verification_plan": recipe.verification_plan,
+                        "status": recipe.status.value,
+                        "enabled": recipe.enabled,
+                        "evidence_count": recipe.evidence_count,
+                    },
+                ),
+            )
+            shell = SessionShell(
+                workspace=workspace,
+                db_path=db_path,
+                max_steps=3,
+                config_dir=Path(tmpdir) / "config",
+                input_func=lambda prompt: next(inputs),
+                output=output,
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
+            )
+
+            with patch(
+                "autonomy.cli.ConversationLoop.handle_user_input",
+                return_value=response,
+            ):
+                result = shell.run()
+            updated = AutonomyStore(db_path).list_recipes()[0]
+
+        self.assertEqual(result, 0)
+        self.assertIn("Candidate ActionRecipe learned:", output.getvalue())
+        self.assertIn('"id": "candidate-recipe"', output.getvalue())
+        self.assertIn("activated: candidate-recipe", output.getvalue())
+        self.assertEqual(updated.status, RecipeStatus.ACTIVE)
+        self.assertTrue(updated.enabled)
+
+    def test_session_shell_can_disable_candidate_recipe_from_prompt(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            db_path = Path(tmpdir) / "chat.db"
+            store = AutonomyStore(db_path)
+            recipe = ActionRecipe(
+                "candidate-recipe",
+                "inspect repository",
+                "Observed in successful outcomes.",
+                {"tool": "filesystem.read", "arguments": {"path": "README.md"}},
+                "read README",
+                "evaluate outcome",
+                evidence_count=2,
+            )
+            store.upsert_recipe(recipe)
+            output = io.StringIO()
+            inputs = iter(["inspect repository", "d", "/exit"])
+            response = ConversationResponse(
+                session_id="session",
+                user_turn_id="user",
+                assistant_turn_id="assistant",
+                run_result=RunResult(
+                    "run-1",
+                    "inspect repository",
+                    TerminationReason.ACHIEVED,
+                    1,
+                    "done",
+                ),
+                reply="run_id: run-1\ntermination: achieved\nsteps: 1\nreason: done",
+                action_recipe_candidates=(
+                    {
+                        "id": recipe.id,
+                        "action_template": recipe.action_template,
+                        "evidence_count": recipe.evidence_count,
+                    },
+                ),
+            )
+            shell = SessionShell(
+                workspace=workspace,
+                db_path=db_path,
+                max_steps=3,
+                config_dir=Path(tmpdir) / "config",
+                input_func=lambda prompt: next(inputs),
+                output=output,
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                router=TaskRouter(),
+                responder=TaskResponder(),
+            )
+
+            with patch(
+                "autonomy.cli.ConversationLoop.handle_user_input",
+                return_value=response,
+            ):
+                result = shell.run()
+            updated = AutonomyStore(db_path).list_recipes()[0]
+
+        self.assertEqual(result, 0)
+        self.assertIn("disabled: candidate-recipe", output.getvalue())
+        self.assertFalse(updated.enabled)
 
     def test_doctor_checks_configured_model_availability(self):
         with (

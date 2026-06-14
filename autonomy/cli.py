@@ -25,7 +25,7 @@ from .conversation_router import (
     ModelConversationRouter,
 )
 from .model import AutonomyModel, ModelClientError
-from .models import RecipeStatus, jsonable
+from .models import ActionRecipe, RecipeStatus, jsonable
 from .procedure_skills import ProcedureSkillError, ProcedureSkillLibrary
 from .providers import (
     PROVIDER_SPECS,
@@ -201,6 +201,8 @@ class SessionShell:
                         "  /max-steps N",
                         "  /skills",
                         "  /recipes  (ActionRecipe view)",
+                        "  /recipes activate RECIPE_ID",
+                        "  /recipes disable RECIPE_ID",
                         "  /tools",
                     ]
                 )
@@ -253,13 +255,7 @@ class SessionShell:
             self._handle_skills_command(arguments)
             return True
         if command == "/recipes":
-            self._write(
-                json.dumps(
-                    jsonable(AutonomyStore(self.db_path).list_recipes()),
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
+            self._handle_recipes_command(arguments)
             return True
         if command == "/tools":
             self._handle_tools_command(arguments)
@@ -275,6 +271,7 @@ class SessionShell:
             return
         self._write(response.reply)
         self._handle_candidate_skill_prompts(response.candidate_skills)
+        self._handle_candidate_recipe_prompts(response.action_recipe_candidates)
 
     def _handle_skills_command(self, arguments: list[str]) -> None:
         registry = build_local_tool_registry(
@@ -309,6 +306,34 @@ class SessionShell:
                 )
         except (KeyError, FileExistsError, ProcedureSkillError, ToolsetConfigurationError) as exc:
             self._write(f"skill error: {exc}")
+
+    def _handle_recipes_command(self, arguments: list[str]) -> None:
+        store = AutonomyStore(self.db_path)
+        try:
+            if not arguments or arguments == ["list"]:
+                self._write(
+                    json.dumps(
+                        jsonable(store.list_recipes()),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return
+            if arguments[0] == "activate" and len(arguments) == 2:
+                store.set_recipe_state(
+                    arguments[1],
+                    status=RecipeStatus.ACTIVE,
+                    enabled=True,
+                )
+                self._write(f"activated: {arguments[1]}")
+                return
+            if arguments[0] == "disable" and len(arguments) == 2:
+                store.set_recipe_state(arguments[1], enabled=False)
+                self._write(f"disabled: {arguments[1]}")
+                return
+            self._write("usage: /recipes [list|activate RECIPE_ID|disable RECIPE_ID]")
+        except KeyError as exc:
+            self._write(f"recipe error: {exc}")
 
     def _handle_tools_command(self, arguments: list[str]) -> None:
         store = ToolsetConfigStore(self.tool_config_dir)
@@ -375,6 +400,67 @@ class SessionShell:
                 except (KeyError, FileExistsError, ProcedureSkillError) as exc:
                     self._write(f"skill error: {exc}")
                     break
+
+    def _handle_candidate_recipe_prompts(self, candidates: tuple[dict, ...]) -> None:
+        if not candidates:
+            return
+        store = AutonomyStore(self.db_path)
+        for candidate in candidates[:3]:
+            recipe_id = str(candidate.get("id", ""))
+            action_template = candidate.get("action_template", {})
+            if not isinstance(action_template, dict):
+                action_template = {}
+            self._write(
+                "\n".join(
+                    [
+                        "Candidate ActionRecipe learned:",
+                        f"- id: {recipe_id}",
+                        f"- tool: {action_template.get('tool', '')}",
+                        f"- purpose: {action_template.get('purpose', candidate.get('intent', ''))}",
+                        f"- evidence: {candidate.get('evidence_count', 0)} successful outcomes",
+                        "",
+                        "[v] view  [y] activate  [d] disable  [enter] later",
+                    ]
+                )
+            )
+            while True:
+                choice = self.input_func("recipe> ").strip().lower()
+                try:
+                    if choice == "":
+                        self._write("candidate kept for later")
+                        break
+                    if choice == "v":
+                        self._write(
+                            json.dumps(
+                                jsonable(self._recipe_by_id(store, recipe_id)),
+                                indent=2,
+                                sort_keys=True,
+                            )
+                        )
+                        continue
+                    if choice == "y":
+                        store.set_recipe_state(
+                            recipe_id,
+                            status=RecipeStatus.ACTIVE,
+                            enabled=True,
+                        )
+                        self._write(f"activated: {recipe_id}")
+                        break
+                    if choice == "d":
+                        store.set_recipe_state(recipe_id, enabled=False)
+                        self._write(f"disabled: {recipe_id}")
+                        break
+                    self._write("choose v, y, d, or enter")
+                except KeyError as exc:
+                    self._write(f"recipe error: {exc}")
+                    break
+
+    @staticmethod
+    def _recipe_by_id(store: AutonomyStore, recipe_id: str) -> ActionRecipe:
+        for recipe in store.list_recipes():
+            if recipe.id == recipe_id:
+                return recipe
+        raise KeyError(f"unknown recipe: {recipe_id}")
 
     def _write(self, message: str) -> None:
         print(message, file=self.output)

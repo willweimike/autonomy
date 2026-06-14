@@ -293,13 +293,16 @@ class AgentLoop:
         return outcome
 
     def learn_from_transition(self, state: RunState, transition: Transition) -> None:
-        learned = self.recipes.learn(transition)
-        if learned:
+        learning_result = self.recipes.learn(transition)
+        if learning_result:
             self.store.record_event(
                 state.run_id,
                 state.step,
                 "candidate_recipe_learned",
-                learned,
+                {
+                    "created": learning_result.created,
+                    "recipe": learning_result.recipe,
+                },
             )
 
     def finish_run(

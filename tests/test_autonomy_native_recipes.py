@@ -50,16 +50,35 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
             learned = self.engine.learn(transition)
 
         self.assertIsNotNone(learned)
-        self.assertEqual(learned.status, RecipeStatus.CANDIDATE)
+        self.assertTrue(learned.created)
+        self.assertEqual(learned.recipe.status, RecipeStatus.CANDIDATE)
         state = RunState("run-3", Goal("orient"))
         self.assertEqual(self.engine.candidates_for(state), [])
 
-        self.store.set_recipe_state(learned.id, status=RecipeStatus.ACTIVE)
+        self.store.set_recipe_state(learned.recipe.id, status=RecipeStatus.ACTIVE)
         candidates = self.engine.candidates_for(state)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].source, "action_skill")
         self.assertEqual(len(candidates[0].actions), 1)
-        self.assertEqual(candidates[0].next_action.recipe_id, learned.id)
+        self.assertEqual(candidates[0].next_action.recipe_id, learned.recipe.id)
+
+    def test_existing_recipe_update_is_not_created(self):
+        action = Action(
+            tool="filesystem.list",
+            arguments={"path": "."},
+            expected_effect="orient repository",
+            verification_plan="confirm listing",
+        )
+        learned = None
+        for run_id in ("run-1", "run-2", "run-3"):
+            self.store.create_run(run_id, "orient")
+            transition = self.transition(run_id, 1, action)
+            self.store.record_transition(transition)
+            learned = self.engine.learn(transition)
+
+        self.assertIsNotNone(learned)
+        self.assertFalse(learned.created)
+        self.assertEqual(learned.recipe.evidence_count, 3)
 
     def test_public_api_does_not_export_recipe_graph_types(self):
         self.assertNotIn("EdgeType", autonomy.__all__)

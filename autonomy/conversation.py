@@ -126,6 +126,7 @@ class ConversationLoop:
         self.last_run_result = result
         self.store.link_conversation_turn_run(user_turn_id, result.run_id)
         candidate_skills = tuple(self._candidate_skills_for_run(result.run_id))
+        action_recipe_candidates = tuple(self._action_recipe_candidates_for_run(result.run_id))
 
         reply = self._format_task_reply(
             result,
@@ -158,6 +159,7 @@ class ConversationLoop:
             reply=reply,
             conversation_context=conversation_context,
             candidate_skills=candidate_skills,
+            action_recipe_candidates=action_recipe_candidates,
             decision=decision,
         )
 
@@ -188,6 +190,25 @@ class ConversationLoop:
                 payload = event["payload"]
                 if isinstance(payload, dict):
                     candidates.append(payload)
+        return candidates
+
+    def _action_recipe_candidates_for_run(self, run_id: str) -> list[dict]:
+        try:
+            journal = self.store.inspect_run(run_id)
+        except KeyError:
+            return []
+        candidates: list[dict] = []
+        for event in journal["events"]:
+            if event["event_type"] != "candidate_recipe_learned":
+                continue
+            payload = event["payload"]
+            if not isinstance(payload, dict) or payload.get("created") is not True:
+                continue
+            recipe = payload.get("recipe")
+            if isinstance(recipe, dict):
+                candidates.append(recipe)
+            if len(candidates) >= 3:
+                break
         return candidates
 
     def _safe_chat_reply(self, conversation_context: str, user_input: str) -> str:

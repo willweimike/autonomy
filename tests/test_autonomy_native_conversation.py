@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from autonomy import (
+    ActionRecipe,
     AutonomyStore,
     ConversationDecision,
     ConversationLoop,
@@ -11,6 +12,7 @@ from autonomy import (
     RunResult,
     TerminationReason,
 )
+from autonomy.models import jsonable
 
 
 class RecordingAgentLoop:
@@ -185,6 +187,85 @@ class ConversationLoopTest(unittest.TestCase):
         self.assertEqual(
             agent_loop.calls[0]["journal_metadata"]["conversation_turn_id"],
             conversation["turns"][0]["id"],
+        )
+
+    def test_task_response_includes_new_action_recipe_candidates_only(self):
+        class RecipeCandidateAgentLoop:
+            def __init__(self, store):
+                self.store = store
+
+            def run(
+                self,
+                goal,
+                max_steps=12,
+                interactive=True,
+                interface="run",
+                conversation_context="",
+                journal_metadata=None,
+            ):
+                del max_steps, interactive, interface, conversation_context, journal_metadata
+                self.store.create_run("run-1", goal)
+                for index in range(4):
+                    recipe = ActionRecipe(
+                        f"new-{index}",
+                        "intent",
+                        "condition",
+                        {
+                            "tool": "filesystem.read",
+                            "arguments": {"path": f"file-{index}.txt"},
+                            "purpose": "read file",
+                        },
+                        "effect",
+                        "verify",
+                        evidence_count=2,
+                    )
+                    self.store.record_event(
+                        "run-1",
+                        index,
+                        "candidate_recipe_learned",
+                        {"created": True, "recipe": jsonable(recipe)},
+                    )
+                existing = ActionRecipe(
+                    "existing",
+                    "intent",
+                    "condition",
+                    {"tool": "filesystem.read", "arguments": {"path": "old.txt"}},
+                    "effect",
+                    "verify",
+                    evidence_count=3,
+                )
+                self.store.record_event(
+                    "run-1",
+                    5,
+                    "candidate_recipe_learned",
+                    {"created": False, "recipe": jsonable(existing)},
+                )
+                return RunResult(
+                    "run-1",
+                    goal,
+                    TerminationReason.ACHIEVED,
+                    1,
+                    "done",
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = AutonomyStore(Path(tmpdir) / "autonomy.db")
+            loop = ConversationLoop(
+                workspace=Path(tmpdir),
+                db_path=Path(tmpdir) / "autonomy.db",
+                max_steps=4,
+                agent_loop_factory=lambda workspace, db_path: RecipeCandidateAgentLoop(store),
+                router=TASK_ROUTER,
+                responder=StaticResponder(),
+                store=store,
+                session_id="session",
+            )
+
+            response = loop.handle_user_input("inspect repository")
+
+        self.assertEqual(
+            [candidate["id"] for candidate in response.action_recipe_candidates],
+            ["new-0", "new-1", "new-2"],
         )
 
     def test_router_task_goal_can_rewrite_user_input_before_agent_loop(self):

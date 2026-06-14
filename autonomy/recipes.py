@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from .models import (
     ActionIntent,
@@ -11,6 +11,12 @@ from .models import (
     Transition,
 )
 from .store import AutonomyStore
+
+
+@dataclass(frozen=True)
+class RecipeLearningResult:
+    recipe: ActionRecipe
+    created: bool
 
 
 class RecipeEngine:
@@ -30,7 +36,7 @@ class RecipeEngine:
             )
         ]
 
-    def learn(self, transition: Transition) -> ActionRecipe | None:
+    def learn(self, transition: Transition) -> RecipeLearningResult | None:
         if not transition.outcome.execution_ok or not transition.observation.succeeded:
             return None
         evidence_count = self.store.successful_action_count(transition.action.fingerprint)
@@ -40,6 +46,7 @@ class RecipeEngine:
         existing = {recipe.id: recipe for recipe in self.store.list_recipes()}
         if recipe_id in existing:
             recipe = replace(existing[recipe_id], evidence_count=evidence_count)
+            created = False
         else:
             recipe = ActionRecipe(
                 id=recipe_id,
@@ -56,8 +63,9 @@ class RecipeEngine:
                 enabled=True,
                 evidence_count=evidence_count,
             )
+            created = True
         self.store.upsert_recipe(recipe)
-        return recipe
+        return RecipeLearningResult(recipe=recipe, created=created)
 
     @staticmethod
     def _intent_for(recipe: ActionRecipe) -> ActionIntent:
