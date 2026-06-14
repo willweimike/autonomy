@@ -200,7 +200,7 @@ class SessionShell:
                         "  /workspace PATH",
                         "  /max-steps N",
                         "  /skills",
-                        "  /recipes",
+                        "  /recipes  (ActionRecipe view)",
                         "  /tools",
                     ]
                 )
@@ -407,7 +407,10 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect")
     inspect.add_argument("run_id")
 
-    recipes = subparsers.add_parser("recipes")
+    recipes = subparsers.add_parser(
+        "recipes",
+        description="Commands for learned ActionRecipe entries.",
+    )
     recipes_sub = recipes.add_subparsers(dest="recipes_command", required=True)
     recipes_sub.add_parser("list")
     activate_recipe = recipes_sub.add_parser("activate")

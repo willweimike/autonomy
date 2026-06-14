@@ -4,18 +4,16 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
+import autonomy
 from autonomy import (
     Action,
     ActionRecipe,
     AutonomyStore,
-    EdgeType,
     GoalStatus,
     Observation,
     Outcome,
-    RecipeEdge,
     RecipeEngine,
     RecipeStatus,
-    SituationRecipeNode,
 )
 from autonomy.models import Goal, RunState, Transition
 
@@ -59,65 +57,14 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
         self.store.set_recipe_state(learned.id, status=RecipeStatus.ACTIVE)
         candidates = self.engine.candidates_for(state)
         self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].source, "action_skill")
+        self.assertEqual(len(candidates[0].actions), 1)
         self.assertEqual(candidates[0].next_action.recipe_id, learned.id)
 
-    def test_active_edges_create_paths_and_bayesian_updates(self):
-        source = ActionRecipe(
-            "source",
-            "list",
-            "repo exists",
-            {"tool": "filesystem.list", "arguments": {"path": "."}},
-            "list files",
-            "confirm listing",
-            RecipeStatus.ACTIVE,
-        )
-        target = ActionRecipe(
-            "target",
-            "search",
-            "files listed",
-            {"tool": "search.text", "arguments": {"path": ".", "query": "TODO"}},
-            "find TODOs",
-            "confirm search",
-            RecipeStatus.ACTIVE,
-        )
-        source_node = SituationRecipeNode(
-            "source-node", "unknown repository", source.id, "repository not inspected", "test"
-        )
-        target_node = SituationRecipeNode(
-            "target-node", "known repository", target.id, "repository inspected", "test"
-        )
-        edge = RecipeEdge(
-            "edge", source_node.id, target_node.id, EdgeType.PRECEDES, "orientation first"
-        )
-        self.store.upsert_recipe(source)
-        self.store.upsert_recipe(target)
-        self.store.upsert_recipe_node(source_node)
-        self.store.upsert_recipe_node(target_node)
-        self.store.upsert_recipe_edge(edge)
-
-        candidates = self.engine.candidates_for(RunState("run", Goal("find TODOs")))
-        graph_path = next(item for item in candidates if len(item.actions) == 2)
-        self.assertEqual([action.recipe_id for action in graph_path.actions], ["source", "target"])
-        self.assertEqual(
-            [node.situation for node in self.store.list_recipe_nodes()],
-            ["unknown repository", "known repository"],
-        )
-
-        self.store.create_run("run", "find TODOs")
-        intent = graph_path.next_action
-        action = Action(
-            intent.tool,
-            intent.arguments,
-            intent.purpose,
-            "agent-derived outcome",
-            purpose=intent.purpose,
-            recipe_id=intent.recipe_id,
-            edge_ids=intent.edge_ids,
-        )
-        transition = self.transition("run", 1, action)
-        self.store.record_transition(transition)
-        self.engine.learn(transition)
-        self.assertEqual(self.store.list_recipe_edges()[0].alpha, 2)
+    def test_public_api_does_not_export_recipe_graph_types(self):
+        self.assertNotIn("EdgeType", autonomy.__all__)
+        self.assertNotIn("RecipeEdge", autonomy.__all__)
+        self.assertNotIn("SituationRecipeNode", autonomy.__all__)
 
     def test_disabled_active_recipe_is_not_selectable(self):
         recipe = ActionRecipe(
@@ -133,6 +80,19 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
         self.store.upsert_recipe(recipe)
 
         self.assertEqual(self.engine.candidates_for(RunState("run", Goal("anything"))), [])
+
+    def test_new_database_does_not_create_recipe_graph_tables(self):
+        with closing(sqlite3.connect(self.store.db_path)) as conn:
+            table_names = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+
+        self.assertIn("action_recipes", table_names)
+        self.assertNotIn("recipe_edges", table_names)
+        self.assertNotIn("situation_recipe_nodes", table_names)
 
     def test_legacy_skill_tables_migrate_without_deletion(self):
         db_path = Path(self.tmpdir.name) / "legacy.db"
@@ -168,12 +128,16 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
         migrated = AutonomyStore(db_path)
 
         self.assertEqual(migrated.list_recipes()[0].id, "legacy")
-        self.assertEqual(migrated.list_recipe_nodes()[0].recipe_id, "legacy")
-        self.assertEqual(migrated.list_recipe_edges()[0].alpha, 2)
+        self.assertEqual(migrated.list_recipes()[0].evidence_count, 3)
         with closing(sqlite3.connect(db_path)) as conn:
             self.assertIsNotNone(
                 conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE name = 'skills'"
+                ).fetchone()
+            )
+            self.assertIsNotNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'skill_edges'"
                 ).fetchone()
             )
 

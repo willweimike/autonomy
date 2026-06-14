@@ -9,15 +9,12 @@ from typing import Any, Iterator
 from .models import (
     ActionRecipe,
     ConversationTurn,
-    EdgeType,
     LearningProposal,
     LearningProposalStatus,
     LearningProposalType,
     ProcedureSkillSummary,
-    RecipeEdge,
     RecipeStatus,
     RunResult,
-    SituationRecipeNode,
     Transition,
     jsonable,
 )
@@ -83,23 +80,6 @@ class AutonomyStore:
                     status TEXT NOT NULL,
                     enabled INTEGER NOT NULL,
                     evidence_count INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS recipe_edges (
-                    edge_id TEXT PRIMARY KEY,
-                    source_node_id TEXT NOT NULL,
-                    target_node_id TEXT NOT NULL,
-                    edge_type TEXT NOT NULL,
-                    condition TEXT NOT NULL,
-                    alpha INTEGER NOT NULL DEFAULT 1,
-                    beta INTEGER NOT NULL DEFAULT 1,
-                    enabled INTEGER NOT NULL DEFAULT 1
-                );
-                CREATE TABLE IF NOT EXISTS situation_recipe_nodes (
-                    node_id TEXT PRIMARY KEY,
-                    situation TEXT NOT NULL,
-                    recipe_id TEXT NOT NULL,
-                    condition TEXT NOT NULL,
-                    evidence TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS procedure_skills (
                     name TEXT PRIMARY KEY,
@@ -173,23 +153,6 @@ class AutonomyStore:
                 SELECT skill_id, intent, preconditions, action_template_json,
                        expected_effect, verification_plan, status, enabled, evidence_count
                 FROM skills
-                """
-            )
-        if self._table_exists(conn, "situation_skill_nodes"):
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO situation_recipe_nodes
-                SELECT node_id, situation, skill_id, condition, evidence
-                FROM situation_skill_nodes
-                """
-            )
-        if self._table_exists(conn, "skill_edges"):
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO recipe_edges
-                SELECT edge_id, source_node_id, target_node_id, edge_type,
-                       condition, alpha, beta, enabled
-                FROM skill_edges
                 """
             )
 
@@ -429,90 +392,6 @@ class AutonomyStore:
             )
             if cursor.rowcount == 0:
                 raise KeyError(f"unknown recipe: {recipe_id}")
-
-    def upsert_recipe_edge(self, edge: RecipeEdge) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO recipe_edges VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(edge_id) DO UPDATE SET
-                    source_node_id=excluded.source_node_id,
-                    target_node_id=excluded.target_node_id,
-                    edge_type=excluded.edge_type,
-                    condition=excluded.condition,
-                    alpha=excluded.alpha,
-                    beta=excluded.beta,
-                    enabled=excluded.enabled
-                """,
-                (
-                    edge.id,
-                    edge.source_node_id,
-                    edge.target_node_id,
-                    edge.edge_type.value,
-                    edge.condition,
-                    edge.alpha,
-                    edge.beta,
-                    int(edge.enabled),
-                ),
-            )
-
-    def upsert_recipe_node(self, node: SituationRecipeNode) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO situation_recipe_nodes VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(node_id) DO UPDATE SET
-                    situation=excluded.situation,
-                    recipe_id=excluded.recipe_id,
-                    condition=excluded.condition,
-                    evidence=excluded.evidence
-                """,
-                (node.id, node.situation, node.recipe_id, node.condition, node.evidence),
-            )
-
-    def list_recipe_nodes(self) -> list[SituationRecipeNode]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM situation_recipe_nodes ORDER BY node_id"
-            ).fetchall()
-        return [
-            SituationRecipeNode(
-                id=row["node_id"],
-                situation=row["situation"],
-                recipe_id=row["recipe_id"],
-                condition=row["condition"],
-                evidence=row["evidence"],
-            )
-            for row in rows
-        ]
-
-    def update_recipe_edges(self, edge_ids: tuple[str, ...], success: bool) -> None:
-        if not edge_ids:
-            return
-        column = "alpha" if success else "beta"
-        with self._connect() as conn:
-            for edge_id in edge_ids:
-                conn.execute(
-                    f"UPDATE recipe_edges SET {column} = {column} + 1 WHERE edge_id = ?",
-                    (edge_id,),
-                )
-
-    def list_recipe_edges(self) -> list[RecipeEdge]:
-        with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM recipe_edges ORDER BY edge_id").fetchall()
-        return [
-            RecipeEdge(
-                id=row["edge_id"],
-                source_node_id=row["source_node_id"],
-                target_node_id=row["target_node_id"],
-                edge_type=EdgeType(row["edge_type"]),
-                condition=row["condition"],
-                alpha=int(row["alpha"]),
-                beta=int(row["beta"]),
-                enabled=bool(row["enabled"]),
-            )
-            for row in rows
-        ]
 
     def sync_procedure_skill(self, skill: ProcedureSkillSummary) -> ProcedureSkillSummary:
         with self._connect() as conn:

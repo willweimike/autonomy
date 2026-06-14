@@ -273,7 +273,6 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
                     "filesystem.list",
                     {"path": "/"},
                     "list outside workspace",
-                    edge_confidence=5.0,
                     evidence_strength=5.0,
                 )
             ],

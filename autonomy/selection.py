@@ -11,7 +11,6 @@ class CandidateSelector:
 
     WEIGHTS = {
         "purpose": 0.10,
-        "edge_confidence": 0.30,
         "evidence_strength": 0.30,
         "risk": -0.35,
         "side_effects": -0.20,
@@ -99,7 +98,6 @@ class CandidateSelector:
         side_effects = action_side_effects or (lambda action: ())
         details = {
             "purpose": sum(1.0 if a.purpose.strip() else 0.0 for a in candidate.actions) / count,
-            "edge_confidence": sum(a.edge_confidence for a in candidate.actions) / count,
             "evidence_strength": sum(a.evidence_strength for a in candidate.actions) / count,
             "risk": sum(self.RISK_SCORE[risk(a)] for a in candidate.actions) / count,
             "side_effects": sum(1.0 if side_effects(a) else 0.0 for a in candidate.actions) / count,

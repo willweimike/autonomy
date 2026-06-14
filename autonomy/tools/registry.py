@@ -182,10 +182,8 @@ class ToolRegistry:
             verification_plan=verification_plan,
             purpose=purpose,
             risk_level=spec.default_risk,
-            edge_confidence=intent.edge_confidence,
             evidence_strength=intent.evidence_strength,
             recipe_id=intent.recipe_id,
-            edge_ids=intent.edge_ids,
         )
 
     def execute(self, action: Action) -> Observation:

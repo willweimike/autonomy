@@ -8,7 +8,6 @@ def path(
     *,
     tool="test.tool",
     purpose="purpose",
-    edge_confidence=0.5,
     evidence_strength=0.0,
 ):
     return CandidatePath(
@@ -18,7 +17,6 @@ def path(
                 tool=tool,
                 arguments={"name": name},
                 purpose=purpose,
-                edge_confidence=edge_confidence,
                 evidence_strength=evidence_strength,
             )
         ],
@@ -28,12 +26,12 @@ def path(
 class AutonomyNativeSelectionTest(unittest.TestCase):
     def test_penalties_are_scored_before_top_three_selection(self):
         candidates = [
-            path("best", edge_confidence=0.9, evidence_strength=0.8),
-            path("second", edge_confidence=0.8, evidence_strength=0.7),
-            path("third", edge_confidence=0.7, evidence_strength=0.6),
-            path("fourth", edge_confidence=0.1, evidence_strength=0.1),
-            path("unknown-tool", tool="missing", edge_confidence=1.0, evidence_strength=1.0),
-            path("no-purpose", purpose="", edge_confidence=0.5, evidence_strength=0.4),
+            path("best", evidence_strength=0.8),
+            path("second", evidence_strength=0.7),
+            path("third", evidence_strength=0.6),
+            path("fourth", evidence_strength=0.1),
+            path("unknown-tool", tool="missing", evidence_strength=1.0),
+            path("no-purpose", purpose="", evidence_strength=0.4),
         ]
 
         selected = CandidateSelector(beam_width=3).select(candidates, {"test.tool"})
@@ -45,7 +43,7 @@ class AutonomyNativeSelectionTest(unittest.TestCase):
 
     def test_deduplicates_equivalent_actions(self):
         first = path("first-source")
-        duplicate = path("duplicate-source", edge_confidence=0.9)
+        duplicate = path("duplicate-source", evidence_strength=0.9)
         duplicate.actions[0] = ActionIntent(
             tool=first.actions[0].tool,
             arguments=first.actions[0].arguments,
@@ -85,8 +83,8 @@ class AutonomyNativeSelectionTest(unittest.TestCase):
         self.assertEqual(invalid.penalty_reasons, ["invalid tool arguments"])
 
     def test_uses_gateway_risk_instead_of_model_scoring_fields(self):
-        low = path("low", edge_confidence=0.5, evidence_strength=0.5)
-        high = path("high", edge_confidence=0.5, evidence_strength=0.5)
+        low = path("low", evidence_strength=0.5)
+        high = path("high", evidence_strength=0.5)
 
         selected = CandidateSelector().select(
             [high, low],

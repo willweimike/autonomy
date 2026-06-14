@@ -19,14 +19,6 @@ class RecipeStatus(str, Enum):
     ACTIVE = "active"
 
 
-class EdgeType(str, Enum):
-    PRECEDES = "precedes"
-    ENABLES = "enables"
-    VERIFIES = "verifies"
-    REMEDIATES = "remediates"
-    ALTERNATIVE_TO = "alternative_to"
-
-
 class TerminationReason(str, Enum):
     ACHIEVED = "achieved"
     BLOCKED = "blocked"
@@ -72,8 +64,6 @@ class ActionIntent:
     arguments: dict[str, Any]
     purpose: str = ""
     recipe_id: str | None = None
-    edge_ids: tuple[str, ...] = ()
-    edge_confidence: float = 0.5
     evidence_strength: float = 0.0
 
     @property
@@ -98,12 +88,10 @@ class Action:
     safety_allowed: bool = True
     permission_allowed: bool = True
     goal_progress: float = 0.0
-    edge_confidence: float = 0.5
     evidence_strength: float = 0.0
     cost: float = 0.0
     uncertainty: float = 0.0
     recipe_id: str | None = None
-    edge_ids: tuple[str, ...] = ()
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
@@ -222,31 +210,6 @@ class ActionRecipe:
     status: RecipeStatus = RecipeStatus.CANDIDATE
     enabled: bool = True
     evidence_count: int = 0
-
-
-@dataclass(frozen=True)
-class SituationRecipeNode:
-    id: str
-    situation: str
-    recipe_id: str
-    condition: str
-    evidence: str = ""
-
-
-@dataclass(frozen=True)
-class RecipeEdge:
-    id: str
-    source_node_id: str
-    target_node_id: str
-    edge_type: EdgeType
-    condition: str
-    alpha: int = 1
-    beta: int = 1
-    enabled: bool = True
-
-    @property
-    def reliability(self) -> float:
-        return self.alpha / float(self.alpha + self.beta)
 
 
 @dataclass(frozen=True)

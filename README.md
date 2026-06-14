@@ -24,12 +24,12 @@ AgentLoop -> LearningLoop -> CuratorDaemon
 ```
 
 The system separates procedure knowledge, executable experience, and
-situation-level composition:
+per-turn candidates:
 
 ```text
-ProcedureSkill -> planning knowledge from SKILL.md
-ActionRecipe   -> successful template that can form one Action
-Situation Graph -> evidence-backed Recipe composition
+Procedure Skill -> planning knowledge from SKILL.md
+ActionRecipe    -> successful single-action template learned from tool use
+CandidatePath   -> current-turn candidate, not long-term graph memory
 ```
 
 Hermes Agent is retained only as a read-only engineering reference. It is not
@@ -52,7 +52,7 @@ python3.13 -m autonomy model setup openai-api
 python3.13 -m autonomy --db /tmp/autonomy.db doctor
 python3.13 -m autonomy run "Analyze why this project's tests fail" --workspace .
 python3.13 -m autonomy inspect RUN_ID
-python3.13 -m autonomy recipes list
+python3.13 -m autonomy recipes list              # ActionRecipe commands
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
@@ -89,7 +89,7 @@ Session commands:
 /workspace PATH
 /max-steps N
 /skills
-/recipes
+/recipes     # ActionRecipe view
 /tools
 ```
 
@@ -304,12 +304,23 @@ specs from the live `ToolRegistry`, including descriptions, argument contracts,
 toolset, risk level, and side effects. The model still only proposes
 `ActionIntent`; execution remains gated by `ActionGateway`.
 
+ActionRecipes are learned single-action templates. They can propose one
+`ActionIntent` after being activated through the `recipes` CLI, but they do not
+form graph paths and do not participate in governance. The previous
+RecipeGraph/edge reliability layer has been removed; governance remains in
+`ActionGateway`, `ToolSpec`, `ApprovalPolicy`, and outcome evaluation.
+
 Every run finishes with a lightweight `LearningLoop` review. Achieved runs
 with at least two successful outcomes may generate a `new_skill` candidate
 under `~/.autonomy/skill-candidates/`. Candidate documents are not scanned or
 used until a user approves them with `autonomy skills approve`. Rejected and
 approved candidates remain as audit artifacts and are hidden from the default
 candidate list.
+
+Model-generated Procedure Skills are always candidate-first. The model can
+draft a `SKILL.md` from a successful run, but it cannot approve or activate
+that draft. Approval is the boundary that moves a candidate into the formal
+Procedure Skill Library.
 
 `CuratorDaemon` runs in the background after each run and uses `SkillCurator`
 to consolidate clear duplicate or subcase Skills. Auto-merge is allowed only

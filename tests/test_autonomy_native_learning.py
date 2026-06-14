@@ -107,6 +107,39 @@ class AutonomyNativeLearningTest(unittest.TestCase):
         self.assertEqual(candidates[0]["proposal_type"], "new_skill")
         self.assertEqual(candidates[0]["source_run_id"], "run-1")
         self.assertIn("successful outcomes", candidates[0]["reason"])
+        self.assertEqual(self.library.index({"filesystem.list"}), [])
+        journal = self.store.inspect_run("run-1")
+        created_events = [
+            event
+            for event in journal["events"]
+            if event["event_type"] == "procedure_skill_candidate_created"
+        ]
+        self.assertEqual(len(created_events), 1)
+        self.assertEqual(created_events[0]["payload"]["candidate_id"], candidates[0]["candidate_id"])
+
+    def test_model_generated_skill_candidate_requires_approval_before_indexing(self):
+        model = DraftModel()
+        state = self.state_with_transitions(2)
+        LearningLoop(
+            model=model,
+            store=self.store,
+            procedure_skills=self.library,
+        ).review_run(
+            state,
+            termination=TerminationReason.ACHIEVED,
+            reason="done",
+        )
+        candidate_id = self.library.list_candidates()[0]["candidate_id"]
+
+        self.assertEqual(self.library.index({"filesystem.list"}), [])
+        approved = self.library.approve_candidate(candidate_id)
+
+        self.assertEqual(approved.summary.name, "learned-skill")
+        self.assertEqual(
+            [summary.name for summary in self.library.index({"filesystem.list"})],
+            ["learned-skill"],
+        )
+        self.assertEqual(self.library.list_candidates(), [])
 
     def test_learning_loop_records_no_learning_for_single_step_achieved_run(self):
         model = DraftModel()
