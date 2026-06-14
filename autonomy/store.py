@@ -133,8 +133,7 @@ class AutonomyStore:
                 );
                 """
             )
-            self._migrate_legacy_skill_tables(conn)
-
+            
     @staticmethod
     def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         return (
@@ -145,16 +144,7 @@ class AutonomyStore:
             is not None
         )
 
-    def _migrate_legacy_skill_tables(self, conn: sqlite3.Connection) -> None:
-        if self._table_exists(conn, "skills"):
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO action_recipes
-                SELECT skill_id, intent, preconditions, action_template_json,
-                       expected_effect, verification_plan, status, enabled, evidence_count
-                FROM skills
-                """
-            )
+
 
     def create_run(self, run_id: str, goal: str) -> None:
         with self._connect() as conn:

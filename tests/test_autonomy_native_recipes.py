@@ -113,52 +113,7 @@ class AutonomyNativeRecipeTest(unittest.TestCase):
         self.assertNotIn("recipe_edges", table_names)
         self.assertNotIn("situation_recipe_nodes", table_names)
 
-    def test_legacy_skill_tables_migrate_without_deletion(self):
-        db_path = Path(self.tmpdir.name) / "legacy.db"
-        with closing(sqlite3.connect(db_path)) as conn:
-            with conn:
-                conn.executescript(
-                    """
-                CREATE TABLE skills (
-                    skill_id TEXT PRIMARY KEY, intent TEXT, preconditions TEXT,
-                    action_template_json TEXT, expected_effect TEXT,
-                    verification_plan TEXT, status TEXT, enabled INTEGER,
-                    evidence_count INTEGER
-                );
-                CREATE TABLE situation_skill_nodes (
-                    node_id TEXT PRIMARY KEY, situation TEXT, skill_id TEXT,
-                    condition TEXT, evidence TEXT
-                );
-                CREATE TABLE skill_edges (
-                    edge_id TEXT PRIMARY KEY, source_node_id TEXT, target_node_id TEXT,
-                    edge_type TEXT, condition TEXT, alpha INTEGER, beta INTEGER,
-                    enabled INTEGER
-                );
-                INSERT INTO skills VALUES
-                    ('legacy', 'intent', 'condition', '{"tool":"filesystem.list"}',
-                     'effect', 'verify', 'active', 1, 3);
-                INSERT INTO situation_skill_nodes VALUES
-                    ('node', 'situation', 'legacy', 'condition', 'evidence');
-                INSERT INTO skill_edges VALUES
-                    ('edge', 'node', 'node', 'precedes', 'condition', 2, 1, 1);
-                    """
-                )
-
-        migrated = AutonomyStore(db_path)
-
-        self.assertEqual(migrated.list_recipes()[0].id, "legacy")
-        self.assertEqual(migrated.list_recipes()[0].evidence_count, 3)
-        with closing(sqlite3.connect(db_path)) as conn:
-            self.assertIsNotNone(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE name = 'skills'"
-                ).fetchone()
-            )
-            self.assertIsNotNone(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE name = 'skill_edges'"
-                ).fetchone()
-            )
+    
 
 
 if __name__ == "__main__":

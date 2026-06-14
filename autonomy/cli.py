@@ -38,7 +38,6 @@ from .recipes import RecipeEngine
 from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon, SkillCurator
 from .storage import (
-    migrate_legacy_storage_for_cli,
     workspace_autonomy_home,
     workspace_db_path,
 )
@@ -83,7 +82,6 @@ def _db_path_for(workspace: Path, explicit_db: Path | None) -> Path:
 
 
 def _prepare_workspace_storage(workspace: Path) -> None:
-    migrate_legacy_storage_for_cli(workspace)
     workspace_autonomy_home(workspace).mkdir(parents=True, exist_ok=True)
 
 
