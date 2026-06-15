@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from autonomy.bundled_procedure_skills import (
     BUNDLED_PROCEDURE_SKILLS,
@@ -49,15 +50,15 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.workspace = Path(self.tmpdir.name) / "workspace"
-        self.global_skills = Path(self.tmpdir.name) / "global-skills"
-        self.global_candidates = Path(self.tmpdir.name) / "global-skill-candidates"
+        self.workspace_skills = Path(self.tmpdir.name) / "workspace-skills"
+        self.workspace_candidates = Path(self.tmpdir.name) / "workspace-skill-candidates"
         self.workspace.mkdir()
         self.store = AutonomyStore(Path(self.tmpdir.name) / "autonomy.db")
         self.library = ProcedureSkillLibrary(
             self.workspace,
             self.store,
-            skills_dir=self.global_skills,
-            candidates_dir=self.global_candidates,
+            skills_dir=self.workspace_skills,
+            candidates_dir=self.workspace_candidates,
         )
         self.tools = {"filesystem.read", "filesystem.list", "search.text", "shell.execute"}
 
@@ -65,25 +66,25 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_configured_skill_store_is_only_formal_source(self):
-        write_skill(self.global_skills, "orientation", "global description")
+        write_skill(self.workspace_skills, "orientation", "configured description")
         write_skill(self.workspace / "skills", "orientation", "workspace description")
 
         index = self.library.index(self.tools)
 
         self.assertEqual(len(index), 1)
         self.assertEqual(index[0].source, "workspace")
-        self.assertEqual(index[0].description, "global description")
+        self.assertEqual(index[0].description, "configured description")
 
     def test_required_tools_platform_and_disabled_state_filter_index(self):
-        write_skill(self.global_skills, "available", "available")
+        write_skill(self.workspace_skills, "available", "available")
         write_skill(
-            self.global_skills,
+            self.workspace_skills,
             "missing-tool",
             "missing",
             requires_tools=("browser.navigate",),
         )
         write_skill(
-            self.global_skills,
+            self.workspace_skills,
             "wrong-platform",
             "wrong",
             platforms=("unsupported-platform",),
@@ -95,7 +96,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
 
     def test_load_selected_limits_to_three_and_records_usage(self):
         for name in ("one", "two", "three", "four"):
-            write_skill(self.global_skills, name, name, body=f"# {name}\n\nsecret-{name}")
+            write_skill(self.workspace_skills, name, name, body=f"# {name}\n\nsecret-{name}")
 
         loaded = self.library.load_selected(["one", "two", "three", "four"], self.tools)
 
@@ -106,6 +107,26 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         }
         self.assertEqual(records["one"]["load_count"], 1)
         self.assertEqual(records["four"]["load_count"], 0)
+
+    def test_formal_skill_index_is_cached_until_files_change(self):
+        write_skill(self.workspace_skills, "one", "one")
+        write_skill(self.workspace_skills, "two", "two")
+
+        with patch.object(
+            self.library,
+            "_read_skill",
+            wraps=self.library._read_skill,
+        ) as read_skill:
+            self.library.index(self.tools)
+            self.library.load_selected(["one"], self.tools)
+
+            self.assertEqual(read_skill.call_count, 2)
+
+            write_skill(self.workspace_skills, "three", "three")
+            names = [summary.name for summary in self.library.index(self.tools)]
+
+            self.assertEqual(names, ["one", "three", "two"])
+            self.assertEqual(read_skill.call_count, 5)
 
     def test_candidate_directory_is_not_scanned_and_approval_targets_formal_store(self):
         candidate = self.library.write_candidate(
@@ -120,7 +141,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
 
         self.assertEqual(self.library.index(self.tools), [])
         self.assertTrue(
-            (self.global_candidates / candidate["candidate_id"] / "SKILL.md").is_file()
+            (self.workspace_candidates / candidate["candidate_id"] / "SKILL.md").is_file()
         )
         self.assertFalse((self.workspace / ".autonomy" / "skill-candidates").exists())
         self.assertEqual(candidate["source_workspace"], str(self.workspace.resolve()))
@@ -128,7 +149,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         approved = self.library.approve_candidate(candidate["candidate_id"])
         self.assertEqual(approved.summary.source, "workspace")
         self.assertTrue(
-            (self.global_skills / "candidate-procedure" / "SKILL.md").is_file()
+            (self.workspace_skills / "candidate-procedure" / "SKILL.md").is_file()
         )
         self.assertEqual(self.library.list_candidates(), [])
         with self.assertRaises(FileExistsError):
@@ -147,7 +168,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
 
         self.assertEqual(rejected["status"], "rejected")
         self.assertTrue(
-            (self.global_candidates / candidate["candidate_id"] / "SKILL.md").is_file()
+            (self.workspace_candidates / candidate["candidate_id"] / "SKILL.md").is_file()
         )
         self.assertEqual(self.library.list_candidates(), [])
 
@@ -180,13 +201,18 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "codebase-documentation",
             ],
         )
-        web_only = self.library.index({"web.fetch", "web.extract"})
+        web_only = self.library.index({"web.fetch", "web.extract", "web.links"})
         code_tools = {
             "filesystem.read",
             "filesystem.list",
+            "filesystem.tree",
             "filesystem.write",
             "filesystem.patch",
             "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
             "shell.execute",
         }
         browser_tools = {
@@ -197,8 +223,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "browser.scroll",
             "browser.back",
             "browser.press",
+            "browser.screenshot",
             "browser.get_images",
             "browser.console",
+            "browser.dialog",
         }
         process_tools = {
             "shell.execute",
@@ -210,25 +238,41 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         }
         debugging_tools = {
             "filesystem.read",
+            "filesystem.tree",
             "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
             "shell.execute",
         }
         editing_tools = {
             "filesystem.read",
+            "filesystem.tree",
             "filesystem.write",
             "filesystem.patch",
             "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
             "shell.execute",
         }
         api_tools = {
             "web.fetch",
             "web.extract",
+            "web.links",
             "shell.execute",
         }
         documentation_tools = {
             "filesystem.read",
+            "filesystem.tree",
             "filesystem.write",
             "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
             "shell.execute",
         }
         code_only = self.library.index(code_tools)
@@ -319,11 +363,17 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         )
         available_tools = {
             "filesystem.read",
+            "filesystem.tree",
             "filesystem.write",
             "filesystem.patch",
             "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
             "web.fetch",
             "web.extract",
+            "web.links",
             "shell.execute",
             "process.start",
             "process.poll",
@@ -340,6 +390,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 self.assertIn("Pitfalls:", skill.body)
                 self.assertIn("Outcome checks:", skill.body)
                 self.assertIn("guidance only", skill.body)
+                if summary.name != "api-debugging":
+                    self.assertIn("filesystem.outline", skill.body)
+                    self.assertIn("filesystem.symbol_search", skill.body)
+                    self.assertIn("filesystem.syntax_check", skill.body)
 
         self.assertIn(
             "root-cause hypothesis",
@@ -355,7 +409,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         )
 
     def test_invalid_skill_and_path_escape_are_rejected(self):
-        invalid = self.global_skills / "invalid"
+        invalid = self.workspace_skills / "invalid"
         invalid.mkdir(parents=True)
         (invalid / "SKILL.md").write_text("not frontmatter", encoding="utf-8")
         with self.assertRaises(ProcedureSkillError):

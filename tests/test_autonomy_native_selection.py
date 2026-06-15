@@ -70,6 +70,23 @@ class AutonomyNativeSelectionTest(unittest.TestCase):
         )
         self.assertGreater(repeated.score_details["penalty"], 0)
 
+    def test_penalizes_repeated_failed_or_non_ok_action(self):
+        repeated = path("repeated-failure", evidence_strength=1.0)
+        alternative = path("alternative", evidence_strength=0.2)
+
+        selected = CandidateSelector(beam_width=2).select(
+            [repeated, alternative],
+            {"test.tool"},
+            failed_action_counts={repeated.next_action.fingerprint: 2},
+        )
+
+        self.assertEqual([item.source for item in selected], ["alternative", "repeated-failure"])
+        self.assertEqual(
+            repeated.penalty_reasons,
+            ["action already failed or produced non-ok outcome in this run:2"],
+        )
+        self.assertEqual(repeated.score_details["penalty"], 2.0)
+
     def test_applies_tool_argument_validation_as_a_penalty(self):
         invalid = path("invalid-arguments")
 

@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ...models import Observation, RiskLevel
 
@@ -30,22 +30,34 @@ class ManagedProcess:
     process: subprocess.Popen[str]
     started_at: float
     output: str = ""
+    output_redacted: bool = False
     reader_thread: threading.Thread | None = field(default=None, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock)
 
-    def append_output(self, chunk: str) -> None:
+    def append_output(self, chunk: str, *, redacted: bool = False) -> None:
         with self.lock:
             self.output = (self.output + chunk)[-MAX_OUTPUT_CHARS:]
+            self.output_redacted = self.output_redacted or redacted
 
     def output_text(self) -> str:
         with self.lock:
             return self.output
 
 
+Redactor = Callable[[str], tuple[str, bool]]
+
+
 class ProcessManager:
-    def __init__(self, workspace: str | Path, *, max_processes: int = 8):
+    def __init__(
+        self,
+        workspace: str | Path,
+        *,
+        max_processes: int = 8,
+        redactor: Redactor | None = None,
+    ):
         self.root = Path(workspace).resolve()
         self.max_processes = max_processes
+        self._redactor = redactor
         self._processes: dict[str, ManagedProcess] = {}
         self._lock = threading.RLock()
 
@@ -87,7 +99,7 @@ class ProcessManager:
 
         record = ManagedProcess(
             process_id=process_id,
-            command=command,
+            command=self._redact(command)[0],
             cwd=cwd,
             process=process,
             started_at=time.time(),
@@ -215,7 +227,8 @@ class ProcessManager:
             for chunk in iter(stream.readline, ""):
                 if not chunk:
                     break
-                record.append_output(chunk)
+                redacted, changed = self._redact(chunk)
+                record.append_output(redacted, redacted=changed)
         finally:
             try:
                 stream.close()
@@ -258,7 +271,13 @@ class ProcessManager:
             output = record.output_text()
             payload["output_preview"] = output[-4000:]
             payload["output_truncated"] = len(output) > 4000
+            payload["output_redacted"] = record.output_redacted
         return payload
+
+    def _redact(self, text: str) -> tuple[str, bool]:
+        if self._redactor is None:
+            return text, False
+        return self._redactor(text)
 
     def _reap_exited_locked(self) -> None:
         for record in self._processes.values():

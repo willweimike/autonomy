@@ -20,6 +20,7 @@ class CandidateSelector:
     PENALTIES = {
         "candidate has no actions": 1000.0,
         "action already succeeded with accepted outcome in this run": 0.75,
+        "action already failed or produced non-ok outcome in this run": 1.0,
         "tool is unavailable": 1.0,
         "invalid tool arguments": 1.0,
     }
@@ -34,17 +35,20 @@ class CandidateSelector:
         candidates: Iterable[CandidatePath],
         available_tools: set[str],
         blocked_action_fingerprints: set[str] | None = None,
+        failed_action_counts: dict[str, int] | None = None,
         action_rejection_reason: Callable[[ActionIntent], str] | None = None,
         action_risk: Callable[[ActionIntent], RiskLevel] | None = None,
         action_side_effects: Callable[[ActionIntent], tuple[str, ...]] | None = None,
     ) -> list[CandidatePath]:
         blocked_action_fingerprints = blocked_action_fingerprints or set()
+        failed_action_counts = failed_action_counts or {}
         unique: dict[tuple[str, ...], CandidatePath] = {}
         for candidate in candidates:
             candidate.penalty_reasons = self.penalty_reasons(
                 candidate,
                 available_tools,
                 blocked_action_fingerprints,
+                failed_action_counts,
                 action_rejection_reason,
             )
             key = tuple(action.fingerprint for action in candidate.actions)
@@ -65,6 +69,7 @@ class CandidateSelector:
         candidate: CandidatePath,
         available_tools: set[str],
         blocked_action_fingerprints: set[str] | None = None,
+        failed_action_counts: dict[str, int] | None = None,
         action_rejection_reason: Callable[[ActionIntent], str] | None = None,
     ) -> list[str]:
         reasons: list[str] = []
@@ -72,6 +77,12 @@ class CandidateSelector:
             return ["candidate has no actions"]
         if candidate.next_action.fingerprint in (blocked_action_fingerprints or set()):
             reasons.append("action already succeeded with accepted outcome in this run")
+        failed_count = (failed_action_counts or {}).get(candidate.next_action.fingerprint, 0)
+        if failed_count:
+            reasons.append(
+                "action already failed or produced non-ok outcome in this run:"
+                f"{failed_count}"
+            )
         for action in candidate.actions:
             if action.tool not in available_tools:
                 reasons.append(f"tool is unavailable: {action.tool}")
@@ -109,6 +120,13 @@ class CandidateSelector:
 
     @classmethod
     def _penalty_value(cls, reason: str) -> float:
+        repeated_failure = "action already failed or produced non-ok outcome in this run:"
+        if reason.startswith(repeated_failure):
+            try:
+                count = int(reason.removeprefix(repeated_failure))
+            except ValueError:
+                count = 1
+            return min(3.0, 1.0 * max(count, 1))
         for prefix, value in cls.PENALTIES.items():
             if reason == prefix or reason.startswith(f"{prefix}:"):
                 return value

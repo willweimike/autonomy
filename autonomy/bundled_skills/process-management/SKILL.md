@@ -24,6 +24,10 @@ Workflow:
 
 Tool use rules:
 - Keep `workdir` inside the workspace.
+- Bound noisy foreground output with `shell.execute` `max_chars`; use
+  `process.log` `max_chars` for long-running process logs.
+- Shell and process observations redact common secret-like output; rely on
+  redacted evidence rather than trying to expose raw credentials.
 - Do not start duplicate servers or watchers without checking existing process
   state.
 - Treat `process_id` values as run-local handles from prior observations.

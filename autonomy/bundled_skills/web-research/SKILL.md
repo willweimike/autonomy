@@ -4,7 +4,7 @@ description: Research a web page using governed fetch and extract tools.
 version: 1.0.0
 tags: [web, research]
 platforms: [macos, linux, windows]
-requires_tools: [web.fetch, web.extract]
+requires_tools: [web.fetch, web.extract, web.links]
 ---
 
 # Web Research
@@ -16,6 +16,7 @@ Workflow:
 - Prefer `web.extract` when the user needs readable page content.
 - Use `web.fetch` when status, content type, redirects, or raw body evidence
   matters.
+- Use `web.links` when the next useful URL must be chosen from a known page.
 - Keep requests focused on the URLs needed for the goal.
 - Compare extracted content against the user goal before proposing another
   action.
@@ -23,6 +24,7 @@ Workflow:
 Tool use rules:
 - Only use `http` or `https` URLs.
 - Use `max_chars` when a page may be large.
+- Use `max_links` when a page may contain many navigation links.
 - Treat redirects and non-2xx responses as evidence, not as automatic success.
 
 Pitfalls:

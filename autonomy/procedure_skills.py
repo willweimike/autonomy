@@ -41,6 +41,8 @@ class ProcedureSkillLibrary:
             candidates_dir or autonomy_home / "skill-candidates"
         ).expanduser().resolve()
         self.store = store
+        self._formal_cache_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._formal_cache: list[ProcedureSkill] | None = None
 
     def index(
         self,
@@ -50,11 +52,8 @@ class ProcedureSkillLibrary:
     ) -> list[ProcedureSkillSummary]:
         summaries: list[ProcedureSkillSummary] = []
         current_platform = self._current_platform()
-        if not self.skills_dir.is_dir():
-            return []
-        for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
-            skill = self._read_skill(skill_file, self.skills_dir, "workspace")
-            summary = self.store.sync_procedure_skill(skill.summary)
+        for skill in self._formal_skills():
+            summary = skill.summary
             if not include_disabled and not summary.enabled:
                 continue
             if summary.platforms and current_platform not in summary.platforms:
@@ -69,13 +68,12 @@ class ProcedureSkillLibrary:
         names: list[str],
         available_tools: set[str],
     ) -> list[ProcedureSkill]:
-        allowed = {item.name: item for item in self.index(available_tools)}
+        allowed = {item.summary.name: item for item in self._available_skills(available_tools)}
         selected: list[ProcedureSkill] = []
         for name in names[:3]:
             if name not in allowed or any(item.summary.name == name for item in selected):
                 continue
-            summary = allowed[name]
-            skill = self._read_skill(Path(summary.path), self.skills_dir, "workspace")
+            skill = allowed[name]
             selected.append(skill)
             self.store.record_procedure_skill_loaded(name)
         return selected
@@ -87,20 +85,11 @@ class ProcedureSkillLibrary:
         return loaded[0]
 
     def list_all(self, *, include_disabled: bool = False) -> list[ProcedureSkill]:
-        if not self.skills_dir.is_dir():
-            return []
-        skills: list[ProcedureSkill] = []
-        for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
-            skill = self._read_skill(skill_file, self.skills_dir, "workspace")
-            summary = self.store.sync_procedure_skill(skill.summary)
-            if include_disabled or summary.enabled:
-                skills.append(
-                    ProcedureSkill(
-                        summary=summary,
-                        body=skill.body,
-                        raw_content=skill.raw_content,
-                    )
-                )
+        skills = [
+            skill
+            for skill in self._formal_skills()
+            if include_disabled or skill.summary.enabled
+        ]
         return sorted(skills, key=lambda item: item.summary.name)
 
     def install_bundled(
@@ -127,6 +116,7 @@ class ProcedureSkillLibrary:
             approved = self._read_skill(destination, self.skills_dir, "workspace")
             self.store.sync_procedure_skill(approved.summary)
             installed.append(approved.summary)
+        self._invalidate_formal_cache()
         return installed
 
     def write_candidate(
@@ -222,6 +212,7 @@ class ProcedureSkillLibrary:
             metadata,
             "procedure_skill_candidate_approved",
         )
+        self._invalidate_formal_cache()
         return approved
 
     def reject_candidate(self, candidate_id: str) -> dict[str, str]:
@@ -240,6 +231,7 @@ class ProcedureSkillLibrary:
         if name not in known:
             raise KeyError(f"unknown procedure skill: {name}")
         self.store.set_procedure_skill_enabled(name, False)
+        self._invalidate_formal_cache()
 
     def delete_skill(self, name: str) -> None:
         skill_dir = self._skill_dir(name)
@@ -249,6 +241,7 @@ class ProcedureSkillLibrary:
         self._read_skill(skill_path, self.skills_dir, "workspace")
         shutil.rmtree(skill_dir)
         self.store.delete_procedure_skill_record(name)
+        self._invalidate_formal_cache()
 
     def merge_skill(
         self,
@@ -284,6 +277,7 @@ class ProcedureSkillLibrary:
         approved = self._read_skill(target_path, self.skills_dir, "workspace")
         self.store.sync_procedure_skill(approved.summary)
         self.delete_skill(source_name)
+        self._invalidate_formal_cache()
         return approved
 
     def merge_skill_preview(self, merged_content: str, target_name: str) -> ProcedureSkill:
@@ -324,6 +318,45 @@ class ProcedureSkillLibrary:
             source=source,
             path=resolved,
         )
+
+    def _available_skills(self, available_tools: set[str]) -> list[ProcedureSkill]:
+        summaries = {summary.name for summary in self.index(available_tools)}
+        return [
+            skill
+            for skill in self._formal_skills()
+            if skill.summary.name in summaries
+        ]
+
+    def _formal_skills(self) -> list[ProcedureSkill]:
+        signature = self._formal_skill_signature()
+        if self._formal_cache_signature != signature or self._formal_cache is None:
+            skills: list[ProcedureSkill] = []
+            if self.skills_dir.is_dir():
+                for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
+                    skills.append(self._read_skill(skill_file, self.skills_dir, "workspace"))
+            self._formal_cache_signature = signature
+            self._formal_cache = sorted(skills, key=lambda item: item.summary.name)
+        return [
+            ProcedureSkill(
+                summary=self.store.sync_procedure_skill(skill.summary),
+                body=skill.body,
+                raw_content=skill.raw_content,
+            )
+            for skill in self._formal_cache
+        ]
+
+    def _formal_skill_signature(self) -> tuple[tuple[str, int, int], ...]:
+        if not self.skills_dir.is_dir():
+            return ()
+        signature: list[tuple[str, int, int]] = []
+        for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
+            stat = skill_file.stat()
+            signature.append((str(skill_file.resolve()), stat.st_mtime_ns, stat.st_size))
+        return tuple(signature)
+
+    def _invalidate_formal_cache(self) -> None:
+        self._formal_cache_signature = None
+        self._formal_cache = None
 
     def _candidate_skill_path(self, candidate_id: str) -> Path:
         if not re.fullmatch(r"[a-f0-9]{32}", candidate_id):

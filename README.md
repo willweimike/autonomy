@@ -95,9 +95,9 @@ Session commands:
 
 ## Model Provider Setup
 
-The system supports `ollama` and `openai-api`. Run `autonomy model setup` to
-choose a provider, endpoint, and model. Re-running setup is the only way to
-switch the global provider or model.
+The system supports `ollama` and `openai-api`. Run `autonomy model setup` from
+the workspace to choose a provider, endpoint, and model. Re-running setup is
+the only way to switch that workspace's provider or model.
 
 Validated workspace configuration is stored under:
 
@@ -125,9 +125,25 @@ autonomy run "Read README.md and summarize the implemented system" \
 Ollama's base URL must include `/v1`. The default is
 `http://127.0.0.1:11434/v1`.
 
+## Project Context
+
+At run start, Autonomy loads the first workspace guidance file it finds from:
+
+```text
+AUTONOMY.md
+.autonomy.md
+AGENTS.md
+agents.md
+.cursorrules
+```
+
+The content is bounded and passed to planning as project context. It can guide
+candidate generation, but it does not grant tool permissions, bypass
+`ActionGateway`, or affect approval and outcome evaluation.
+
 ## Toolsets
 
-Tool availability is controlled by a global Autonomy-native toolset catalog and
+Tool availability is controlled by an Autonomy-native toolset catalog and a
 workspace configuration file:
 
 ```text
@@ -166,16 +182,24 @@ Tool implementation code is grouped under `autonomy/tools/`:
 - `autonomy/tools/toolsets/`: toolset-specific implementations such as
   `web`, `browser`, and `process`
 
-The legacy modules `autonomy.browser_tools`, `autonomy.process_tools`, and
-`autonomy.web_tools` are compatibility shims that re-export the implementations
-from `autonomy/tools/toolsets/`.
-
 The first implemented local software-engineering tools are:
 
 - `filesystem.read`
+- `filesystem.read_many`
 - `filesystem.list`
+- `filesystem.tree`
+- `filesystem.stat`
+- `filesystem.stat_many`
+- `filesystem.diff`
+- `filesystem.outline`
+- `filesystem.imports`
+- `filesystem.symbol_search`
+- `filesystem.syntax_check`
 - `filesystem.write`
 - `filesystem.patch`
+- `filesystem.trash`
+- `filesystem.mkdir`
+- `filesystem.move`
 - `filesystem.search_files`
 - `search.text`
 - `shell.execute`
@@ -185,17 +209,86 @@ The first implemented local software-engineering tools are:
 - `process.wait`
 - `process.stop`
 
+`filesystem.read` supports line pagination with optional `offset` and `limit`.
+Small files still return raw text. Large or explicitly paginated reads return
+`LINE|CONTENT` output with a continuation hint, which keeps model context
+bounded during repository analysis. `filesystem.list` also supports `offset`
+and `limit` so broad or recursive directory listings can be paged.
+`filesystem.read_many` reads up to 12 UTF-8 text files in one bounded JSON
+observation with shared line-window options and a total character budget. Use
+it for small manifest, README, entrypoint, or config batches.
+`filesystem.tree` returns a compact bounded ASCII tree and is the preferred
+first step for repository orientation before broad recursive listing.
+`filesystem.stat` returns bounded JSON metadata for one workspace path, such as
+type, size, modified time, and immediate directory counts, without reading file
+content. `filesystem.stat_many` returns the same metadata for up to 50 paths in
+one bounded observation, which reduces tool turns when checking whether several
+candidate files or directories exist before reading them. `filesystem.stat`,
+`filesystem.stat_many`, and `filesystem.read` expose a lightweight file
+`revision` token that can be passed as `expected_revision` to
+`filesystem.write` or `filesystem.patch` to fail fast if a file changed after it
+was inspected.
+`filesystem.diff` returns bounded read-only git status and diff information for
+the workspace or one path. It omits secret-bearing environment files and should
+be preferred over shell `git diff` when checking what changed after edits.
+`filesystem.outline` returns a compact Python class/function/method outline for
+a file or directory, which helps locate relevant code before reading full files.
+`filesystem.imports` summarizes Python import statements for a file or
+directory, which helps identify module dependencies and likely integration
+points.
+`filesystem.symbol_search` searches Python class/function/method definitions by
+name, match mode, and symbol kind, which is useful for jumping directly to
+relevant code.
+`filesystem.syntax_check` checks Python syntax without executing code and is a
+cheap post-edit diagnostic before running broader tests.
+`filesystem.search_files` and `search.text` also support `offset` and `limit`
+so broad searches can be paged instead of flooding the model context.
+`filesystem.search_files` can additionally return `output_mode=files_only` or
+`output_mode=count`, and `context=N` can include nearby lines around content
+matches to reduce follow-up file reads.
+`filesystem.patch` defaults to exact replacement. When a recent read proves
+the intended lines are present but indentation or surrounding whitespace has
+drifted, `match_mode=strip_lines` can match the same line sequence after
+trimming each line.
+Successful `filesystem.write` and `filesystem.patch` actions against Python
+files also include lightweight `syntax_ok` diagnostics in their observation
+payloads, without executing code.
+`filesystem.trash` moves one workspace file or directory to the system Trash
+through the `trash` CLI. Use it for deletion instead of shell `rm`, `rmdir`,
+or `rm -rf`; it is medium risk and is only exposed when the `trash` CLI is
+available.
+`filesystem.mkdir` creates workspace directories and `filesystem.move` renames
+or moves one workspace file or directory without overwriting an existing
+destination. Use them instead of shell `mkdir` or `mv` commands.
+When `filesystem.read`, `filesystem.list`, or search tools receive a missing
+workspace path, they include similar path suggestions when available.
+Secret-bearing environment files such as `.env`, `.env.local`, and `.envrc`
+are blocked from file read/list/search/write/patch tools to avoid putting
+credentials into model context. Use `.env.example` when configuration shape is
+needed.
+
 Use `shell.execute` for short foreground commands. Use `process.start` for
 dev servers, watchers, long tests, or other commands that need later
 inspection through `process.poll`, `process.log`, or `process.wait`.
 `process.stop` terminates managed background processes. Starting and stopping
 processes are medium-risk actions and still require approval in interactive
 use; non-interactive runs reject them by default.
+`shell.execute` bounds stdout and stderr by default and accepts optional
+`max_chars` for focused command output, which prevents large build or test logs
+from flooding the model context. Shell and managed process output also redacts
+common API keys, bearer tokens, credential assignments, and private key blocks
+before observations are written to the run journal.
 
 The implemented web tools are:
 
 - `web.fetch`
 - `web.extract`
+- `web.links`
+
+`web.links` extracts bounded, de-duplicated absolute links from a known page so
+the agent can choose follow-up URLs without opening a browser when interaction
+is not needed. Web observations redact secret-like URL query parameters and
+page text before they are written to the run journal.
 
 The implemented browser tools use headless Chromium through Playwright:
 
@@ -206,8 +299,10 @@ The implemented browser tools use headless Chromium through Playwright:
 - `browser.scroll`
 - `browser.back`
 - `browser.press`
+- `browser.screenshot`
 - `browser.get_images`
 - `browser.console`
+- `browser.dialog`
 
 Install the Python package through the project environment, then install the
 Chromium runtime:
@@ -220,18 +315,24 @@ autonomy doctor
 If Chromium is missing, `doctor` and `tools status` report the browser tools as
 unavailable and they are not exposed to planning.
 
-`browser.snapshot` returns URL, title, visible text, and an `elements` inventory
-of visible actionable controls. Browser interaction candidates should use
-selectors from this inventory instead of guessing selectors from page text.
+`browser.snapshot` returns URL, title, bounded visible text, and an `elements`
+inventory of visible actionable controls. Use optional `full` and `max_chars`
+when a compact snapshot is not enough. Browser interaction candidates should
+use selectors from this inventory instead of guessing selectors from page text.
+`browser.screenshot` captures a PNG under workspace `.autonomy/browser-screenshots/`
+when visual evidence is needed.
 `browser.get_images` returns page image URLs, alt text, dimensions, and
 selectors. `browser.console` returns console output and JavaScript page errors,
 or evaluates a small diagnostic JavaScript expression in the current page.
+`browser.dialog` accepts or dismisses native JavaScript dialogs reported by
+`browser.snapshot`. Browser observations redact secret-like page URLs, image
+URLs, console output, and diagnostic expression results before journaling.
 
-Read-only local and web fetch actions are low risk. File write/patch actions
-and browser actions are medium risk. Unknown shell commands require interactive
-approval and are rejected in non-interactive mode. File editing tools are
-workspace-only and text-only; use them instead of shell heredocs or in-place
-shell edits.
+Read-only local and web fetch actions are low risk. File write/patch/trash,
+mkdir, and move actions and browser actions are medium risk. Unknown shell
+commands require interactive approval and are rejected in non-interactive mode.
+File editing tools are workspace-only and text-only; use them instead of shell
+heredocs or in-place shell edits.
 
 Model-generated tool use is represented as an `ActionIntent`:
 
@@ -306,8 +407,8 @@ toolset, risk level, and side effects. The model still only proposes
 
 ActionRecipes are learned single-action templates. They can propose one
 `ActionIntent` after being activated through the `recipes` CLI, but they do not
-form graph paths and do not participate in governance. The previous
-RecipeGraph/edge reliability layer has been removed; governance remains in
+form graph paths and do not participate in governance. There is no long-term
+graph path layer for recipes; governance remains in
 `ActionGateway`, `ToolSpec`, `ApprovalPolicy`, and outcome evaluation.
 
 Every run finishes with a lightweight `LearningLoop` review. Achieved runs

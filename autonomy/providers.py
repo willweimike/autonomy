@@ -20,7 +20,7 @@ class ModelClientError(RuntimeError):
 
 
 class ProviderConfigurationError(ValueError):
-    """An invalid or incomplete global model provider configuration."""
+    """An invalid or incomplete workspace model provider configuration."""
 
 
 class ModelProvider(Protocol):

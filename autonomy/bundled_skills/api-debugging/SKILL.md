@@ -4,7 +4,7 @@ description: Diagnose REST and GraphQL integrations layer by layer.
 version: 1.0.0
 tags: [api, rest, graphql, debugging, integration]
 platforms: [macos, linux, windows]
-requires_tools: [web.fetch, web.extract, shell.execute]
+requires_tools: [web.fetch, web.extract, web.links, shell.execute]
 ---
 
 # API Debugging
@@ -20,9 +20,13 @@ Workflow:
   request/response evidence.
 - For GraphQL, inspect response `errors` even when HTTP status is 200.
 - Compare API behavior against relevant docs with `web.extract` when available.
+- Use `web.links` on documentation index pages to choose the specific endpoint
+  or authentication page to inspect next.
 
 Tool use rules:
 - Do not expose or invent secrets in requests.
+- Use `.env.example` or documentation to understand required variables; do not
+  read secret-bearing `.env` files.
 - Prefer read-only diagnostics unless the user explicitly asks for a write
   operation against an API.
 - Keep evidence to status, headers that matter, and short response excerpts.

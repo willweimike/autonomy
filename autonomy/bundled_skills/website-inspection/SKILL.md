@@ -4,7 +4,7 @@ description: Inspect a website by combining web extraction with browser snapshot
 version: 1.0.0
 tags: [web, browser, inspection]
 platforms: [macos, linux, windows]
-requires_tools: [web.extract, browser.navigate, browser.snapshot, browser.get_images, browser.console]
+requires_tools: [web.extract, web.links, browser.navigate, browser.snapshot, browser.screenshot, browser.get_images, browser.console, browser.dialog]
 ---
 
 # Website Inspection
@@ -14,12 +14,20 @@ of a website.
 
 Workflow:
 - Use `web.extract` first for static page content.
+- Use `web.links` to inspect page navigation or choose a relevant follow-up
+  URL without opening a browser.
 - Use `browser.navigate` and `browser.snapshot` only if the page requires
   rendering, interaction, or visual page state.
+- Keep browser snapshots compact first; request `full=true` or a larger
+  `max_chars` only when the inspected content is truncated.
 - Use `browser.get_images` when website media or image metadata is part of the
   inspection goal.
+- Use `browser.screenshot` for visual layout evidence or when text extraction
+  and snapshots do not capture the requested page state.
 - Use `browser.console` to diagnose broken dynamic pages or missing client-side
   content.
+- If a snapshot reports `pending_dialogs`, use `browser.dialog` before taking
+  further snapshots or interactions.
 - Compare the extracted text and browser snapshot before drawing conclusions.
 - If interaction becomes necessary, rely on snapshot `elements` selectors.
 

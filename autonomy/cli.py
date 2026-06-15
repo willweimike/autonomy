@@ -27,6 +27,7 @@ from .conversation_router import (
 from .model import AutonomyModel, ModelClientError
 from .models import ActionRecipe, RecipeStatus, jsonable
 from .procedure_skills import ProcedureSkillError, ProcedureSkillLibrary
+from .project_context import load_project_context
 from .providers import (
     PROVIDER_SPECS,
     ModelConfiguration,
@@ -113,6 +114,7 @@ def build_agent_loop(
         recipes=RecipeEngine(store),
         procedure_skills=procedure_skills,
         curator_daemon=CuratorDaemon(SkillCurator(procedure_skills, store)),
+        project_context=load_project_context(workspace),
     )
 
 

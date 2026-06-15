@@ -24,7 +24,7 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
         "web",
         "Web research and extraction tools.",
         "implemented",
-        ("web.fetch", "web.extract"),
+        ("web.fetch", "web.extract", "web.links"),
     ),
     ToolsetDefinition("search", "Search tools.", "implemented", ("search.text",)),
     ToolsetDefinition("vision", "Image and visual understanding tools."),
@@ -48,10 +48,22 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
         "implemented",
         (
             "filesystem.read",
+            "filesystem.read_many",
             "filesystem.list",
+            "filesystem.tree",
+            "filesystem.stat",
+            "filesystem.stat_many",
+            "filesystem.diff",
             "filesystem.write",
             "filesystem.patch",
+            "filesystem.trash",
+            "filesystem.mkdir",
+            "filesystem.move",
             "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
         ),
     ),
     ToolsetDefinition(
@@ -66,8 +78,10 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
             "browser.scroll",
             "browser.back",
             "browser.press",
+            "browser.screenshot",
             "browser.get_images",
             "browser.console",
+            "browser.dialog",
         ),
     ),
     ToolsetDefinition("skills", "Procedure skill management and discovery tools.", "implemented"),
@@ -84,6 +98,7 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
 
 
 CATALOG_BY_NAME = {definition.name: definition for definition in TOOLSET_CATALOG}
+_MAX_UNAVAILABLE_REASON_CHARS = 500
 
 
 class ToolsetConfigurationError(ValueError):
@@ -230,7 +245,9 @@ def toolset_catalog_status(
         unavailable_tools = [
             {
                 "tool": tool,
-                "reason": str(tool_statuses.get(tool, {}).get("unavailable_reason", "")),
+                "reason": _compact_unavailable_reason(
+                    tool_statuses.get(tool, {}).get("unavailable_reason", "")
+                ),
             }
             for tool in visible_tools
             if not tool_statuses.get(tool, {}).get("available", True)
@@ -248,3 +265,16 @@ def toolset_catalog_status(
             }
         )
     return rows
+
+
+def _compact_unavailable_reason(reason: object) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    if "Browser logs:" in text:
+        text = text.split("Browser logs:", 1)[0].strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    compact = " ".join(lines) if lines else text
+    if len(compact) > _MAX_UNAVAILABLE_REASON_CHARS:
+        compact = compact[: _MAX_UNAVAILABLE_REASON_CHARS - 3].rstrip() + "..."
+    return compact

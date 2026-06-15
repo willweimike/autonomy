@@ -26,6 +26,7 @@ from autonomy import (
     build_local_tool_registry,
 )
 from autonomy.outcome import ModelAssistedOutcomeEvaluator
+from autonomy.project_context import ProjectContext
 
 
 class SequenceModel:
@@ -108,6 +109,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         outcome_evaluator=None,
         procedure_skills=None,
         curator_daemon=None,
+        project_context=None,
     ):
         return AgentLoop(
             model=model,
@@ -121,6 +123,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
             selector=CandidateSelector(beam_width=3),
             procedure_skills=procedure_skills,
             curator_daemon=curator_daemon,
+            project_context=project_context,
         )
 
     def test_agent_loop_executes_only_one_action_per_step_and_achieves_goal(self):
@@ -161,6 +164,38 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
 
         started = self.store.inspect_run(result.run_id)["events"][0]["payload"]
         self.assertEqual(started["interface"], "chat")
+
+    def test_agent_loop_loads_project_context_into_state_and_journal(self):
+        class ContextCapturingModel(SequenceModel):
+            def __init__(self):
+                super().__init__([[candidate(goal_achieving=True)]])
+                self.project_contexts = []
+
+            def propose(self, state, available_tools, procedure_skills, tool_specs=None):
+                self.project_contexts.append(state.project_context)
+                return super().propose(state, available_tools, procedure_skills, tool_specs)
+
+        context = ProjectContext(
+            source="AGENTS.md",
+            content="## AGENTS.md\n\nUse project rules.",
+            original_chars=32,
+            truncated=False,
+        )
+        model = ContextCapturingModel()
+
+        result = self.agent_loop(model, project_context=context).run(
+            "collect evidence",
+            interactive=False,
+        )
+
+        journal = self.store.inspect_run(result.run_id)
+        context_events = [
+            event for event in journal["events"] if event["event_type"] == "project_context_loaded"
+        ]
+        self.assertEqual(model.project_contexts, ["## AGENTS.md\n\nUse project rules."])
+        self.assertEqual(len(context_events), 1)
+        self.assertEqual(context_events[0]["payload"]["source"], "AGENTS.md")
+        self.assertFalse(context_events[0]["payload"]["truncated"])
 
     def test_agent_loop_triggers_curator_daemon_after_run_finish(self):
         class FakeCuratorDaemon:
@@ -494,6 +529,72 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(selected["payload"]["tool"], "filesystem.write")
         self.assertEqual(selected["payload"]["risk_level"], "medium")
 
+    def test_agent_loop_denies_file_trash_in_non_interactive_mode(self):
+        root = Path(self.tmpdir.name)
+        target = root / "obsolete.txt"
+        target.write_text("keep until approved\n", encoding="utf-8")
+        self.registry = build_local_tool_registry(root)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="filesystem.trash",
+                        arguments={"path": "obsolete.txt"},
+                        purpose="remove obsolete file",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model).run("remove a file", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.APPROVAL_DENIED)
+        self.assertTrue(target.is_file())
+        journal = self.store.inspect_run(result.run_id)
+        decision = next(
+            event for event in journal["events"] if event["event_type"] == "approval_decision"
+        )
+        selected = next(
+            event for event in journal["events"] if event["event_type"] == "action_selected"
+        )
+        self.assertFalse(decision["payload"]["allowed"])
+        self.assertEqual(selected["payload"]["tool"], "filesystem.trash")
+
+    def test_agent_loop_denies_file_move_in_non_interactive_mode(self):
+        root = Path(self.tmpdir.name)
+        target = root / "source.txt"
+        target.write_text("keep\n", encoding="utf-8")
+        self.registry = build_local_tool_registry(root)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="filesystem.move",
+                        arguments={
+                            "source": "source.txt",
+                            "destination": "renamed.txt",
+                        },
+                        purpose="rename file",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model).run("rename a file", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.APPROVAL_DENIED)
+        self.assertTrue(target.is_file())
+        self.assertFalse((root / "renamed.txt").exists())
+        journal = self.store.inspect_run(result.run_id)
+        approval = next(
+            event for event in journal["events"] if event["event_type"] == "approval_decision"
+        )
+        selected = next(
+            event for event in journal["events"] if event["event_type"] == "action_selected"
+        )
+        self.assertFalse(approval["payload"]["allowed"])
+        self.assertEqual(selected["payload"]["tool"], "filesystem.move")
+
     def test_agent_loop_blocks_failed_file_patch_after_observation(self):
         root = Path(self.tmpdir.name)
         (root / "sample.txt").write_text("alpha\n", encoding="utf-8")
@@ -562,6 +663,46 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
             )
         )
 
+    def test_agent_loop_prefers_alternative_after_non_ok_action_repeat(self):
+        first_bad = candidate(arguments={"name": "bad"}, purpose="try bad path")
+        second_bad = candidate(arguments={"name": "bad"}, purpose="retry bad path")
+        alternative = candidate(arguments={"name": "good"}, purpose="try alternate path")
+
+        class NonOkThenAchievedEvaluator:
+            def evaluate(self, state, action, observation):
+                del state, observation
+                if action.arguments["name"] == "good":
+                    return Outcome(
+                        execution_ok=True,
+                        goal_status=GoalStatus.ACHIEVED,
+                        reason="alternative path worked",
+                    )
+                return Outcome(
+                    execution_ok=False,
+                    goal_status=GoalStatus.CONTINUE,
+                    reason="same action made no progress",
+                )
+
+        result = self.agent_loop(
+            SequenceModel([[first_bad], [second_bad, alternative]]),
+            outcome_evaluator=NonOkThenAchievedEvaluator(),
+        ).run("avoid no-progress retry", max_steps=3, interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        self.assertEqual([item["name"] for item in self.executions], ["bad", "good"])
+        journal = self.store.inspect_run(result.run_id)
+        penalized_events = [
+            event for event in journal["events"] if event["event_type"] == "candidates_penalized"
+        ]
+        self.assertTrue(
+            any(
+                "action already failed or produced non-ok outcome in this run:1"
+                in item["reasons"]
+                for event in penalized_events
+                for item in event["payload"]
+            )
+        )
+
     def test_agent_loop_exposes_blocked_and_failed_terminations(self):
         def failing_tool(arguments):
             del arguments
@@ -612,8 +753,8 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         library = ProcedureSkillLibrary(
             self.tmpdir.name,
             self.store,
-            skills_dir=Path(self.tmpdir.name) / "global-skills",
-            candidates_dir=Path(self.tmpdir.name) / "global-skill-candidates",
+            skills_dir=Path(self.tmpdir.name) / "workspace-skills",
+            candidates_dir=Path(self.tmpdir.name) / "workspace-skill-candidates",
         )
         result = self.agent_loop(
             SequenceModel([[candidate()], [candidate(goal_achieving=True)]]),
@@ -630,8 +771,8 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         library = ProcedureSkillLibrary(
             self.tmpdir.name,
             self.store,
-            skills_dir=Path(self.tmpdir.name) / "global-skills",
-            candidates_dir=Path(self.tmpdir.name) / "global-skill-candidates",
+            skills_dir=Path(self.tmpdir.name) / "workspace-skills",
+            candidates_dir=Path(self.tmpdir.name) / "workspace-skill-candidates",
         )
         result = self.agent_loop(
             SequenceModel([[candidate(goal_achieving=True)]]),
@@ -642,7 +783,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(library.list_candidates(), [])
 
     def test_progressive_disclosure_is_journaled_but_not_given_to_outcome_evaluator(self):
-        skill_dir = Path(self.tmpdir.name) / "global-skills" / "test-procedure"
+        skill_dir = Path(self.tmpdir.name) / "workspace-skills" / "test-procedure"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
             """---
@@ -663,8 +804,8 @@ secret-procedure-body
         library = ProcedureSkillLibrary(
             self.tmpdir.name,
             self.store,
-            skills_dir=Path(self.tmpdir.name) / "global-skills",
-            candidates_dir=Path(self.tmpdir.name) / "global-skill-candidates",
+            skills_dir=Path(self.tmpdir.name) / "workspace-skills",
+            candidates_dir=Path(self.tmpdir.name) / "workspace-skill-candidates",
         )
 
         class CapturingOutcomeEvaluator:

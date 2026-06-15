@@ -19,6 +19,7 @@ from .models import (
 )
 from .outcome import OutcomeEvaluator
 from .procedure_skills import ProcedureSkillLibrary
+from .project_context import ProjectContext
 from .recipes import RecipeEngine
 from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon
@@ -40,6 +41,7 @@ class AgentLoop:
         procedure_skills: ProcedureSkillLibrary | None = None,
         learning_loop: LearningLoop | None = None,
         curator_daemon: CuratorDaemon | None = None,
+        project_context: ProjectContext | None = None,
     ):
         self.model = model
         self.action_gateway = action_gateway
@@ -54,6 +56,7 @@ class AgentLoop:
             procedure_skills=procedure_skills,
         )
         self.curator_daemon = curator_daemon
+        self.project_context = project_context
 
     @property
     def tools(self):
@@ -111,6 +114,7 @@ class AgentLoop:
             run_id=uuid.uuid4().hex,
             goal=Goal(goal.strip()),
             conversation_context=conversation_context.strip(),
+            project_context=self.project_context.content if self.project_context else "",
         )
         self.store.create_run(state.run_id, state.goal.text)
         model_context = getattr(self.model, "journal_context", {})
@@ -125,6 +129,18 @@ class AgentLoop:
                 **(journal_metadata or {}),
             },
         )
+        if self.project_context:
+            self.store.record_event(
+                state.run_id,
+                0,
+                "project_context_loaded",
+                {
+                    "source": self.project_context.source,
+                    "chars": len(self.project_context.content),
+                    "original_chars": self.project_context.original_chars,
+                    "truncated": self.project_context.truncated,
+                },
+            )
         return state
 
     def run_turn(self, state: RunState, *, interactive: bool) -> RunResult | None:
@@ -255,10 +271,17 @@ class AgentLoop:
             for transition in state.transitions
             if transition.observation.succeeded and transition.outcome.execution_ok
         }
+        failed_action_counts: dict[str, int] = {}
+        for transition in state.transitions:
+            if transition.observation.succeeded and transition.outcome.execution_ok:
+                continue
+            fingerprint = transition.action.fingerprint
+            failed_action_counts[fingerprint] = failed_action_counts.get(fingerprint, 0) + 1
         ranked = self.selector.select(
             candidates,
             self.tools.names,
             completed_action_fingerprints,
+            failed_action_counts,
             self.tools.rejection_reason,
             self.action_gateway.risk_for_intent,
             self.action_gateway.side_effects_for_intent,

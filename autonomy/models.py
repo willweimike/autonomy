@@ -158,6 +158,7 @@ class RunState:
     transitions: list[Transition] = field(default_factory=list)
     current_state: str = "No actions have been executed."
     conversation_context: str = ""
+    project_context: str = ""
 
 
 @dataclass(frozen=True)

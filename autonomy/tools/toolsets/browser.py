@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from ...models import Observation, RiskLevel
+from ..redaction import redact_jsonable, redact_sensitive_text
+
+_DEFAULT_SNAPSHOT_CHARS = 12_000
+_FULL_SNAPSHOT_CHARS = 50_000
+_MAX_SNAPSHOT_CHARS = 50_000
+_MAX_AVAILABILITY_REASON_CHARS = 500
 
 
 def _validate_http_url(raw_url: str) -> str:
@@ -34,6 +42,25 @@ def _non_empty(value, name: str) -> str:
     return text
 
 
+def _snapshot_limit(arguments: dict) -> int:
+    default = _FULL_SNAPSHOT_CHARS if bool(arguments.get("full", False)) else _DEFAULT_SNAPSHOT_CHARS
+    limit = int(arguments.get("max_chars", default))
+    if limit < 1:
+        raise ValueError("max_chars must be at least 1")
+    return min(limit, _MAX_SNAPSHOT_CHARS)
+
+
+def _compact_browser_unavailable_reason(message: str) -> str:
+    text = str(message).strip()
+    if "Browser logs:" in text:
+        text = text.split("Browser logs:", 1)[0].strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    compact = " ".join(lines) if lines else text
+    if len(compact) > _MAX_AVAILABILITY_REASON_CHARS:
+        compact = compact[: _MAX_AVAILABILITY_REASON_CHARS - 3].rstrip() + "..."
+    return compact
+
+
 @lru_cache(maxsize=1)
 def browser_tools_available() -> tuple[bool, str]:
     try:
@@ -56,16 +83,20 @@ def browser_tools_available() -> tuple[bool, str]:
                 False,
                 "chromium browser runtime is not installed; run: python3.13 -m playwright install chromium",
             )
-        return False, f"playwright chromium unavailable: {message}"
+        compact = _compact_browser_unavailable_reason(message)
+        return False, f"playwright chromium unavailable: {compact}"
 
 
 @dataclass
 class BrowserController:
+    screenshot_dir: Path | None = None
     _playwright: Any = field(default=None, init=False, repr=False)
     _browser: Any = field(default=None, init=False, repr=False)
     _page: Any = field(default=None, init=False, repr=False)
     _console_messages: list[dict] = field(default_factory=list, init=False, repr=False)
     _page_errors: list[dict] = field(default_factory=list, init=False, repr=False)
+    _dialogs: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _pending_dialogs: list[dict] = field(default_factory=list, init=False, repr=False)
 
     def _ensure_page(self):
         if self._page is not None:
@@ -84,6 +115,7 @@ class BrowserController:
         try:
             page.on("console", self._record_console_message)
             page.on("pageerror", self._record_page_error)
+            page.on("dialog", self._record_dialog)
         except Exception:
             return
 
@@ -105,6 +137,17 @@ class BrowserController:
                 "source": "pageerror",
             }
         )
+
+    def _record_dialog(self, dialog) -> None:
+        dialog_id = f"dialog_{uuid.uuid4().hex[:12]}"
+        payload = {
+            "id": dialog_id,
+            "type": self._attribute_or_call(dialog, "type", ""),
+            "message": self._attribute_or_call(dialog, "message", ""),
+            "default_value": self._attribute_or_call(dialog, "default_value", ""),
+        }
+        self._dialogs[dialog_id] = dialog
+        self._pending_dialogs.append(payload)
 
     @staticmethod
     def _attribute_or_call(instance, name: str, default):
@@ -148,14 +191,36 @@ class BrowserController:
             }
         )
 
-    def snapshot(self, extra: dict | None = None) -> dict:
+    def snapshot(
+        self,
+        extra: dict | None = None,
+        *,
+        full: bool = False,
+        max_chars: int = _DEFAULT_SNAPSHOT_CHARS,
+    ) -> dict:
         page = self._ensure_page()
-        body_text = page.locator("body").inner_text(timeout=5000) if page.locator("body").count() else ""
+        pending_dialogs = list(self._pending_dialogs)
+        if pending_dialogs:
+            body_text = ""
+            elements = []
+            truncated = False
+            full_text_chars = 0
+        else:
+            full_text = page.locator("body").inner_text(timeout=5000) if page.locator("body").count() else ""
+            full_text_chars = len(full_text)
+            truncated = full_text_chars > max_chars
+            body_text = full_text[:max_chars]
+            elements = self._element_inventory(page)
         payload = {
             "url": page.url,
             "title": page.title(),
-            "text": body_text[:12000],
-            "elements": self._element_inventory(page),
+            "text": body_text,
+            "full": full,
+            "max_chars": max_chars,
+            "text_chars": full_text_chars,
+            "text_truncated": truncated,
+            "elements": elements,
+            "pending_dialogs": pending_dialogs,
         }
         if extra:
             payload.update(extra)
@@ -277,6 +342,26 @@ class BrowserController:
         page.keyboard.press(key)
         return self.snapshot(extra={"action": "press", "key": key})
 
+    def screenshot(self, *, full_page: bool = True) -> dict:
+        page = self._ensure_page()
+        screenshot_dir = self.screenshot_dir or Path.cwd() / ".autonomy" / "browser-screenshots"
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = screenshot_dir / f"browser_screenshot_{uuid.uuid4().hex}.png"
+        page.screenshot(path=str(screenshot_path), full_page=full_page)
+        try:
+            size = screenshot_path.stat().st_size
+        except OSError:
+            size = 0
+        return {
+            "success": screenshot_path.is_file(),
+            "url": page.url,
+            "title": page.title(),
+            "path": str(screenshot_path),
+            "bytes": size,
+            "full_page": full_page,
+            "action": "screenshot",
+        }
+
     def get_images(self) -> dict:
         page = self._ensure_page()
         raw = page.evaluate(
@@ -378,14 +463,80 @@ class BrowserController:
         self._console_messages.clear()
         self._page_errors.clear()
 
+    def dialog(
+        self,
+        *,
+        action: str,
+        prompt_text: str = "",
+        dialog_id: str = "",
+    ) -> dict:
+        page = self._ensure_page()
+        del page
+        dialog_payload = self._select_dialog_payload(dialog_id)
+        if dialog_payload is None:
+            return {
+                "success": False,
+                "error": "no pending browser dialog",
+                "action": "dialog",
+                "pending_dialogs": list(self._pending_dialogs),
+            }
+        effective_dialog_id = str(dialog_payload["id"])
+        dialog = self._dialogs.get(effective_dialog_id)
+        if dialog is None:
+            return {
+                "success": False,
+                "error": f"pending dialog is no longer available: {effective_dialog_id}",
+                "action": "dialog",
+                "pending_dialogs": list(self._pending_dialogs),
+            }
+        try:
+            if action == "accept":
+                dialog.accept(prompt_text)
+            elif action == "dismiss":
+                dialog.dismiss()
+            else:
+                raise ValueError("action must be accept or dismiss")
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "action": "dialog",
+                "dialog": dialog_payload,
+                "pending_dialogs": list(self._pending_dialogs),
+            }
+        self._dialogs.pop(effective_dialog_id, None)
+        self._pending_dialogs = [
+            item for item in self._pending_dialogs if item.get("id") != effective_dialog_id
+        ]
+        return {
+            "success": True,
+            "action": "dialog",
+            "dialog_action": action,
+            "dialog": dialog_payload,
+            "pending_dialogs": list(self._pending_dialogs),
+        }
+
+    def _select_dialog_payload(self, dialog_id: str = "") -> dict | None:
+        if not self._pending_dialogs:
+            return None
+        if dialog_id:
+            for item in self._pending_dialogs:
+                if item.get("id") == dialog_id:
+                    return item
+            return None
+        return self._pending_dialogs[0]
+
 
 def _observation(payload: dict, evidence: str) -> Observation:
+    redacted_payload, payload_redacted = redact_jsonable(payload)
+    redacted_evidence, evidence_redacted = redact_sensitive_text(evidence)
+    redacted = payload_redacted or evidence_redacted
     return Observation(
         "",
         bool(payload.get("success", True)),
-        output=json.dumps(payload, sort_keys=True),
-        error=str(payload.get("error", "")),
-        evidence=(evidence,),
+        output=json.dumps(redacted_payload, sort_keys=True),
+        error=str(redacted_payload.get("error", "")),
+        evidence=(redacted_evidence, f"browser_redacted:{str(redacted).lower()}"),
         side_effects=("browser-state", "network-read"),
     )
 
@@ -399,6 +550,15 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
         if arguments:
             unexpected = ", ".join(sorted(arguments))
             raise ValueError(f"unexpected arguments: {unexpected}")
+
+    def validate_snapshot(arguments: dict) -> None:
+        allowed = {"full", "max_chars"}
+        unexpected = sorted(set(arguments) - allowed)
+        if unexpected:
+            raise ValueError(f"unexpected arguments: {', '.join(unexpected)}")
+        if "full" in arguments and not isinstance(arguments["full"], bool):
+            raise ValueError("full must be a boolean")
+        _snapshot_limit(arguments)
 
     def validate_selector(arguments: dict) -> None:
         _non_empty(arguments["selector"], "selector")
@@ -418,6 +578,14 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
     def validate_press(arguments: dict) -> None:
         _non_empty(arguments["key"], "key")
 
+    def validate_screenshot(arguments: dict) -> None:
+        allowed = {"full_page"}
+        unexpected = sorted(set(arguments) - allowed)
+        if unexpected:
+            raise ValueError(f"unexpected arguments: {', '.join(unexpected)}")
+        if "full_page" in arguments and not isinstance(arguments["full_page"], bool):
+            raise ValueError("full_page must be a boolean")
+
     def validate_console(arguments: dict) -> None:
         allowed = {"clear", "expression"}
         unexpected = sorted(set(arguments) - allowed)
@@ -426,14 +594,32 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
         if "expression" in arguments:
             _non_empty(arguments["expression"], "expression")
 
+    def validate_dialog(arguments: dict) -> None:
+        allowed = {"action", "prompt_text", "dialog_id"}
+        unexpected = sorted(set(arguments) - allowed)
+        if unexpected:
+            raise ValueError(f"unexpected arguments: {', '.join(unexpected)}")
+        action = _non_empty(arguments["action"], "action")
+        if action not in {"accept", "dismiss"}:
+            raise ValueError("action must be accept or dismiss")
+        if "prompt_text" in arguments and not isinstance(arguments["prompt_text"], str):
+            raise ValueError("prompt_text must be a string")
+        if "dialog_id" in arguments and not isinstance(arguments["dialog_id"], str):
+            raise ValueError("dialog_id must be a string")
+
     def navigate(arguments: dict) -> Observation:
         url = _validate_http_url(str(arguments["url"]))
         payload = controller.navigate(url, _timeout_ms(arguments.get("timeout")))
         return _observation(payload, f"browser_navigate:{payload.get('url', url)}")
 
     def snapshot(arguments: dict) -> Observation:
-        validate_no_args(arguments)
-        payload = controller.snapshot(extra={"action": "snapshot"})
+        validate_snapshot(arguments)
+        full = bool(arguments.get("full", False))
+        payload = controller.snapshot(
+            extra={"action": "snapshot"},
+            full=full,
+            max_chars=_snapshot_limit(arguments),
+        )
         return _observation(payload, f"browser_snapshot:{payload.get('url', '')}")
 
     def click(arguments: dict) -> Observation:
@@ -467,6 +653,11 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
         payload = controller.press(key)
         return _observation(payload, f"browser_press:{key}")
 
+    def screenshot(arguments: dict) -> Observation:
+        validate_screenshot(arguments)
+        payload = controller.screenshot(full_page=bool(arguments.get("full_page", True)))
+        return _observation(payload, f"browser_screenshot:{payload.get('path', '')}")
+
     def get_images(arguments: dict) -> Observation:
         validate_no_args(arguments)
         payload = controller.get_images()
@@ -480,6 +671,17 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
             expression=str(expression) if expression is not None else None,
         )
         return _observation(payload, f"browser_console:{payload.get('url', '')}")
+
+    def dialog(arguments: dict) -> Observation:
+        validate_dialog(arguments)
+        payload = controller.dialog(
+            action=str(arguments["action"]),
+            prompt_text=str(arguments.get("prompt_text", "")),
+            dialog_id=str(arguments.get("dialog_id", "")),
+        )
+        dialog_payload = payload.get("dialog", {})
+        dialog_id = dialog_payload.get("id", "") if isinstance(dialog_payload, dict) else ""
+        return _observation(payload, f"browser_dialog:{dialog_id}")
 
     common = {
         "toolset": "browser",
@@ -498,9 +700,12 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
     registry.register(
         "browser.snapshot",
         snapshot,
-        validate_no_args,
-        description="Return the current browser page title, URL, and visible text.",
-        argument_contract={},
+        validate_snapshot,
+        description="Return the current browser page title, URL, bounded visible text, and actionable elements.",
+        argument_contract={
+            "full": "boolean, use larger default text window when true (optional)",
+            "max_chars": "integer max visible text chars, default 12000 compact or 50000 full (optional)",
+        },
         **common,
     )
     registry.register(
@@ -544,6 +749,14 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
         **common,
     )
     registry.register(
+        "browser.screenshot",
+        screenshot,
+        validate_screenshot,
+        description="Capture the current browser page as a PNG file under the workspace .autonomy directory.",
+        argument_contract={"full_page": "boolean, default true (optional)"},
+        **{**common, "side_effects": ("browser-state", "network-read", "file-write")},
+    )
+    registry.register(
         "browser.get_images",
         get_images,
         validate_no_args,
@@ -557,5 +770,17 @@ def register_browser_tools(registry, controller: BrowserController, *, availabil
         validate_console,
         description="Return browser console messages and page errors, or evaluate a diagnostic JavaScript expression.",
         argument_contract={"clear": "boolean (optional)", "expression": "string (optional)"},
+        **common,
+    )
+    registry.register(
+        "browser.dialog",
+        dialog,
+        validate_dialog,
+        description="Accept or dismiss a pending native JavaScript browser dialog reported by browser.snapshot.",
+        argument_contract={
+            "action": "accept|dismiss",
+            "prompt_text": "string (optional)",
+            "dialog_id": "string (optional)",
+        },
         **common,
     )
