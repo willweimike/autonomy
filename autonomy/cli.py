@@ -513,6 +513,10 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--workspace", type=Path, default=Path.cwd())
     chat.add_argument("--max-steps", type=int, default=12)
 
+    tui = subparsers.add_parser("tui")
+    tui.add_argument("--workspace", type=Path, default=Path.cwd())
+    tui.add_argument("--max-steps", type=int, default=12)
+
     model = subparsers.add_parser("model")
     model_sub = model.add_subparsers(dest="model_command", required=True)
     setup = model_sub.add_parser("setup")
@@ -802,6 +806,17 @@ def main(argv: list[str] | None = None) -> int:
             config_dir=config_dir,
             tool_config_dir=tool_config_dir,
         ).run()
+    if args.command == "tui":
+        from .ui import AutonomyTUI
+
+        shell = SessionShell(
+            workspace=workspace,
+            db_path=db_path,
+            max_steps=args.max_steps,
+            config_dir=config_dir,
+            tool_config_dir=tool_config_dir,
+        )
+        return AutonomyTUI(shell).run()
     if args.command == "model":
         try:
             return setup_model(args.provider, config_store)
@@ -913,6 +928,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _workspace_for_args(args) -> Path:
-    if args.command in {"chat", "run", "skills"}:
+    if args.command in {"chat", "run", "skills", "tui"}:
         return args.workspace.expanduser().resolve()
     return Path.cwd().resolve()

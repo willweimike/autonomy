@@ -45,7 +45,9 @@ a runtime dependency.
 ```bash
 python3.13 -m autonomy
 python3.13 -m autonomy chat
+python3.13 -m autonomy tui
 python3.13 -m autonomy chat --workspace . --max-steps 5
+python3.13 -m autonomy tui --workspace . --max-steps 5
 python3.13 -m autonomy model setup
 python3.13 -m autonomy model setup ollama
 python3.13 -m autonomy model setup openai-api
@@ -56,7 +58,7 @@ python3.13 -m autonomy recipes list              # ActionRecipe commands
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation web-research browser-navigation website-inspection
+python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring web-research browser-navigation website-inspection
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -78,14 +80,28 @@ available as context for follow-up requests. `autonomy run "goal"` remains
 available for one-shot tasks and automation, and always treats the input as a
 task.
 
+`autonomy tui` starts a Hermes-inspired terminal UI around the same
+`ConversationLoop`. It renders a responsive startup banner, a session overview
+panel, explicit runtime boundary notes, a compact status rule before each prompt
+with turn count, chat/task mix, and last-run state, transcript-style response
+panels, route classification, run metadata, an Action trail derived from the run
+journal, a toggleable compact/full details mode, a `/` command palette, and
+skill review queues while keeping the same runtime boundaries: the UI never
+executes tools directly, and all task actions still go through
+`AgentLoop -> ActionGateway -> ToolRegistry`.
+
 Session commands:
 
 ```text
 /help
+/
+/?
 /exit
 /quit
 /doctor
 /inspect RUN_ID
+/details compact
+/details full
 /workspace PATH
 /max-steps N
 /skills
@@ -384,6 +400,10 @@ Initial workspace skills can be installed under `<workspace>/.autonomy/skills/`:
 - `technical-spike`
 - `api-debugging`
 - `codebase-documentation`
+- `requesting-code-review`
+- `plan`
+- `writing-plans`
+- `procedure-skill-authoring`
 
 Bundled Procedure Skills are Autonomy-native workflow guidance, adapted from
 Hermes as an engineering reference without importing Hermes runtime or skill
@@ -394,7 +414,7 @@ directory name. Code editing, process, software-engineering, and web/browser
 planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation web-research browser-navigation website-inspection
+autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring web-research browser-navigation website-inspection
 ```
 
 These skills require the corresponding enabled and available tools before they

@@ -184,6 +184,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "technical-spike",
                 "api-debugging",
                 "codebase-documentation",
+                "requesting-code-review",
+                "plan",
+                "writing-plans",
+                "procedure-skill-authoring",
             ]
         )
 
@@ -199,6 +203,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "technical-spike",
                 "api-debugging",
                 "codebase-documentation",
+                "requesting-code-review",
+                "plan",
+                "writing-plans",
+                "procedure-skill-authoring",
             ],
         )
         web_only = self.library.index({"web.fetch", "web.extract", "web.links"})
@@ -275,6 +283,38 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "filesystem.syntax_check",
             "shell.execute",
         }
+        review_tools = {
+            "filesystem.read",
+            "filesystem.tree",
+            "filesystem.diff",
+            "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
+            "shell.execute",
+        }
+        planning_tools = {
+            "filesystem.read",
+            "filesystem.read_many",
+            "filesystem.tree",
+            "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
+            "filesystem.stat_many",
+        }
+        authoring_tools = {
+            "filesystem.read",
+            "filesystem.read_many",
+            "filesystem.tree",
+            "filesystem.write",
+            "filesystem.patch",
+            "filesystem.search_files",
+            "filesystem.stat_many",
+            "filesystem.syntax_check",
+        }
         code_only = self.library.index(code_tools)
         browser_only = self.library.index(browser_tools)
         process_only = self.library.index(process_tools)
@@ -282,6 +322,9 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         editing_only = self.library.index(editing_tools)
         api_only = self.library.index(api_tools)
         documentation_only = self.library.index(documentation_tools)
+        review_only = self.library.index(review_tools)
+        planning_only = self.library.index(planning_tools)
+        authoring_only = self.library.index(authoring_tools)
 
         self.assertEqual(
             [summary.name for summary in code_only],
@@ -302,6 +345,15 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "codebase-documentation",
             [summary.name for summary in documentation_only],
         )
+        self.assertIn(
+            "requesting-code-review",
+            [summary.name for summary in review_only],
+        )
+        self.assertEqual([summary.name for summary in planning_only], ["plan", "writing-plans"])
+        self.assertEqual(
+            [summary.name for summary in authoring_only],
+            ["procedure-skill-authoring"],
+        )
         with self.assertRaises(FileExistsError):
             self.library.install_bundled(["web-research"])
 
@@ -316,6 +368,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "technical-spike",
                 "api-debugging",
                 "codebase-documentation",
+                "requesting-code-review",
+                "plan",
+                "writing-plans",
+                "procedure-skill-authoring",
             }.issubset(installed_names)
         )
 
@@ -407,6 +463,79 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "production implementation",
             self.library.view("technical-spike", available_tools).body,
         )
+
+    def test_planning_and_skill_authoring_bundled_skills_are_autonomy_native(self):
+        installed = self.library.install_bundled(
+            ["plan", "writing-plans", "procedure-skill-authoring"]
+        )
+        available_tools = {
+            "filesystem.read",
+            "filesystem.read_many",
+            "filesystem.tree",
+            "filesystem.write",
+            "filesystem.patch",
+            "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
+            "filesystem.stat_many",
+        }
+
+        self.assertEqual(
+            [summary.name for summary in installed],
+            ["plan", "writing-plans", "procedure-skill-authoring"],
+        )
+        for summary in installed:
+            with self.subTest(skill=summary.name):
+                skill = self.library.view(summary.name, available_tools)
+                self.assertIn("Workflow:", skill.body)
+                self.assertIn("Tool use rules:", skill.body)
+                self.assertIn("Pitfalls:", skill.body)
+                self.assertIn("Outcome checks:", skill.body)
+                self.assertIn("guidance only", skill.body)
+                self.assertNotIn("~/.hermes", skill.raw_content)
+                self.assertNotIn(".hermes/plans", skill.raw_content)
+
+        self.assertIn(
+            "decision-complete",
+            self.library.view("writing-plans", available_tools).body,
+        )
+        self.assertIn(
+            "autonomy/bundled_skills/<name>/SKILL.md",
+            self.library.view("procedure-skill-authoring", available_tools).body,
+        )
+        self.assertIn(
+            "planning-only",
+            self.library.view("plan", available_tools).body,
+        )
+
+    def test_requesting_code_review_bundled_skill_is_autonomy_native(self):
+        installed = self.library.install_bundled(["requesting-code-review"])
+        available_tools = {
+            "filesystem.read",
+            "filesystem.tree",
+            "filesystem.diff",
+            "filesystem.search_files",
+            "filesystem.outline",
+            "filesystem.imports",
+            "filesystem.symbol_search",
+            "filesystem.syntax_check",
+            "shell.execute",
+        }
+
+        self.assertEqual([summary.name for summary in installed], ["requesting-code-review"])
+        skill = self.library.view("requesting-code-review", available_tools)
+
+        self.assertIn("Workflow:", skill.body)
+        self.assertIn("Tool use rules:", skill.body)
+        self.assertIn("Pitfalls:", skill.body)
+        self.assertIn("Outcome checks:", skill.body)
+        self.assertIn("guidance only", skill.body)
+        self.assertIn("filesystem.diff", skill.body)
+        self.assertIn("security-sensitive changes", skill.body)
+        self.assertNotIn("delegate_task", skill.raw_content)
+        self.assertNotIn("~/.hermes", skill.raw_content)
 
     def test_invalid_skill_and_path_escape_are_rejected(self):
         invalid = self.workspace_skills / "invalid"
