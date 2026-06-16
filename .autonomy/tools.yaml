@@ -1,0 +1,9 @@
+version: 1
+tools:
+  enabled_toolsets:
+  - file
+  - search
+  - skills
+  - terminal
+  - web
+  disabled_tools: []
