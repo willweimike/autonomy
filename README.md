@@ -295,16 +295,13 @@ from flooding the model context. Shell and managed process output also redacts
 common API keys, bearer tokens, credential assignments, and private key blocks
 before observations are written to the run journal.
 
-The implemented web tools are:
+The implemented web tool is:
 
-- `web.fetch`
-- `web.extract`
-- `web.links`
+- `web.search`
 
-`web.links` extracts bounded, de-duplicated absolute links from a known page so
-the agent can choose follow-up URLs without opening a browser when interaction
-is not needed. Web observations redact secret-like URL query parameters and
-page text before they are written to the run journal.
+`web.search` searches the public web through DuckDuckGo HTML and returns ranked
+result titles, URLs, and snippets. Web observations redact secret-like query
+parameters and result text before they are written to the run journal.
 
 The implemented browser tools use headless Chromium through Playwright:
 

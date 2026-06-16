@@ -6,7 +6,7 @@ from typing import Callable, Protocol
 
 from .conversation_responder import ConversationResponder
 from .conversation_router import ConversationRouter
-from .models import ConversationMode, ConversationResponse, ConversationTurn, RunResult
+from .models import ConversationMode, ConversationResponse, ConversationTurn, RunResult, TerminationReason
 from .providers import ModelClientError, ProviderConfigurationError
 from .store import AutonomyStore
 
@@ -226,14 +226,20 @@ class ConversationLoop:
         user_input: str,
     ) -> str:
         del decision
-        try:
-            summary = self.responder.summarize_task_result(
-                conversation_context,
-                user_input,
-                result,
+        if result.termination == TerminationReason.FAILED and result.steps_executed == 0:
+            summary = (
+                "I could not start the task because the model did not return valid structured "
+                f"JSON for planning. No tool action was executed. Reason: {result.reason}"
             )
-        except (ModelClientError, ProviderConfigurationError, ValueError) as exc:
-            summary = f"task summary response error: {exc}"
+        else:
+            try:
+                summary = self.responder.summarize_task_result(
+                    conversation_context,
+                    user_input,
+                    result,
+                )
+            except (ModelClientError, ProviderConfigurationError, ValueError) as exc:
+                summary = f"task summary response error: {exc}"
         return "\n".join(
             [
                 summary,

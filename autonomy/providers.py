@@ -43,6 +43,61 @@ class ModelProvider(Protocol):
         ...
 
 
+def _decode_model_json_content(content: str) -> dict:
+    try:
+        decoded = json.loads(content)
+    except json.JSONDecodeError as original_exc:
+        recovered = _extract_json_object(content)
+        if recovered is None:
+            raise ModelClientError(
+                f"model returned invalid JSON content at line {original_exc.lineno}, column {original_exc.colno}"
+            ) from original_exc
+        try:
+            decoded = json.loads(recovered)
+        except json.JSONDecodeError as recovered_exc:
+            raise ModelClientError(
+                f"model returned invalid JSON content at line {original_exc.lineno}, column {original_exc.colno}"
+            ) from recovered_exc
+    if not isinstance(decoded, dict):
+        raise ModelClientError("model JSON content must be an object")
+    return decoded
+
+
+def _extract_json_object(content: str) -> str | None:
+    fenced = content.strip()
+    if fenced.startswith("```"):
+        lines = fenced.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+            body = "\n".join(lines[1:-1]).strip()
+            if body.startswith("{") and body.endswith("}"):
+                return body
+    start = content.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(content)):
+        char = content[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return content[start : index + 1]
+    return None
+
+
 @dataclass(frozen=True)
 class ProviderSpec:
     provider_id: str
@@ -332,15 +387,7 @@ class OpenAICompatibleProvider:
                 raise TypeError("message content must be a string")
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelClientError(f"chat completion response is invalid: {exc}") from exc
-        try:
-            decoded = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise ModelClientError(
-                f"model returned invalid JSON content at line {exc.lineno}, column {exc.colno}"
-            ) from exc
-        if not isinstance(decoded, dict):
-            raise ModelClientError("model JSON content must be an object")
-        return decoded
+        return _decode_model_json_content(content)
 
     def _request_json(self, path: str, payload: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"

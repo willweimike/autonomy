@@ -209,7 +209,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "procedure-skill-authoring",
             ],
         )
-        web_only = self.library.index({"web.fetch", "web.extract", "web.links"})
+        web_only = self.library.index({"web.search"})
         code_tools = {
             "filesystem.read",
             "filesystem.list",
@@ -267,9 +267,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "shell.execute",
         }
         api_tools = {
-            "web.fetch",
-            "web.extract",
-            "web.links",
+            "web.search",
             "shell.execute",
         }
         documentation_tools = {
@@ -427,9 +425,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "filesystem.imports",
             "filesystem.symbol_search",
             "filesystem.syntax_check",
-            "web.fetch",
-            "web.extract",
-            "web.links",
+            "web.search",
             "shell.execute",
             "process.start",
             "process.poll",

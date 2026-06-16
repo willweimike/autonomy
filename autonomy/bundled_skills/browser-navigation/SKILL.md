@@ -33,7 +33,7 @@ Workflow:
 
 Tool use rules:
 - Browser actions are medium risk and may require approval.
-- Prefer read-only `web.extract` when interaction is not necessary.
+- Prefer read-only `web.search` when discovery is enough and page interaction is not necessary.
 - Keep selectors specific and avoid broad destructive clicks.
 - Do not invent selectors. If no suitable element appears in the snapshot,
   take another snapshot, scroll, or report the limitation.

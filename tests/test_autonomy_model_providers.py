@@ -122,6 +122,54 @@ class AutonomyModelProviderTest(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["response_format"], {"type": "json_object"})
 
+    def test_provider_recovers_json_from_fenced_content(self):
+        provider = OpenAICompatibleProvider(
+            "ollama",
+            "qwen2.5vl:7b",
+            "ollama",
+            "http://127.0.0.1:11434/v1",
+            180,
+        )
+        response = Response(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '```json\n{"ok": true}\n```',
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        )
+        with patch("urllib.request.urlopen", return_value=response):
+            self.assertEqual(provider.complete_json({"messages": []}), {"ok": True})
+
+    def test_provider_recovers_json_from_surrounding_prose(self):
+        provider = OpenAICompatibleProvider(
+            "ollama",
+            "qwen2.5vl:7b",
+            "ollama",
+            "http://127.0.0.1:11434/v1",
+            180,
+        )
+        response = Response(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": 'Here is the JSON:\n{"ok": true}\nDone.',
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        )
+        with patch("urllib.request.urlopen", return_value=response):
+            self.assertEqual(provider.complete_json({"messages": []}), {"ok": True})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -360,11 +360,16 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
                 del exc_type, exc, traceback
 
             def read(self, size=-1):
-                body = b"<html><body>Example Domain</body></html>"
+                body = (
+                    "<html><body>"
+                    "<a class='result__a' href='https://example.test/'>Example Domain</a>"
+                    "<a class='result__snippet'>Example Domain information</a>"
+                    "</body></html>"
+                ).encode("utf-8")
                 return body if size < 0 else body[:size]
 
             def geturl(self):
-                return "https://example.test/"
+                return "https://duckduckgo.com/html/?q=example"
 
         self.registry = build_local_tool_registry(
             self.tmpdir.name,
@@ -374,12 +379,12 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
             [
                 [
                     candidate(
-                        tool="web.fetch",
+                        tool="web.search",
                         arguments={
-                            "url": "https://example.test/",
+                            "query": "Example Domain",
                             "_goal_achieving": True,
                         },
-                        purpose="fetch target page",
+                        purpose="search target page",
                     )
                 ]
             ]
@@ -393,7 +398,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         selected = next(
             event for event in journal["events"] if event["event_type"] == "action_selected"
         )
-        self.assertEqual(selected["payload"]["tool"], "web.fetch")
+        self.assertEqual(selected["payload"]["tool"], "web.search")
         self.assertEqual(selected["payload"]["tool_spec"]["toolset"], "web")
 
     def test_non_interactive_mode_denies_action_that_requires_approval(self):

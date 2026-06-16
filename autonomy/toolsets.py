@@ -22,9 +22,9 @@ class ToolsetDefinition:
 TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
     ToolsetDefinition(
         "web",
-        "Web research and extraction tools.",
+        "Web search tools.",
         "implemented",
-        ("web.fetch", "web.extract", "web.links"),
+        ("web.search",),
     ),
     ToolsetDefinition("search", "Search tools.", "implemented", ("search.text",)),
     ToolsetDefinition("vision", "Image and visual understanding tools."),

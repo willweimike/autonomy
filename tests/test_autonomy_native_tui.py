@@ -408,6 +408,59 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("filesystem.write", output)
         self.assertIn("approved", output)
 
+    def test_tui_task_path_renders_approval_prompt_when_action_requires_it(self):
+        response = ConversationResponse(
+            session_id="s1",
+            user_turn_id="u1",
+            assistant_turn_id="a1",
+            run_result=None,
+            reply="unused",
+        )
+        fake_agent_loop = SimpleNamespace(
+            action_gateway=SimpleNamespace(approval=None)
+        )
+
+        class ApprovalConversation:
+            def __init__(self):
+                self.inputs: list[str] = []
+                self.agent_loop_factory = lambda _workspace, _db_path: fake_agent_loop
+
+            def handle_user_input(self, text: str) -> ConversationResponse:
+                self.inputs.append(text)
+                created = self.agent_loop_factory(Path("/workspace"), Path("/workspace/.autonomy/autonomy.db"))
+                action = Action(
+                    tool="filesystem.write",
+                    arguments={"path": "README.md"},
+                    expected_effect="write file",
+                    verification_plan="outcome evaluation",
+                    purpose="update docs",
+                    risk_level=RiskLevel.MEDIUM,
+                )
+                allowed, reason = created.action_gateway.approval.authorize(action, interactive=True)
+                return ConversationResponse(
+                    session_id="s1",
+                    user_turn_id="u1",
+                    assistant_turn_id="a1",
+                    run_result=None,
+                    reply=f"approval allowed={allowed}; reason={reason}",
+                )
+
+        shell = FakeShell(["write README", "a", "/exit"], response)
+        conversation = ApprovalConversation()
+        shell.conversation = conversation
+        shell.agent_loop_factory = conversation.agent_loop_factory
+
+        result = AutonomyTUI(shell, width=100, color=False).run()
+        output = shell.output.getvalue()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(conversation.inputs, ["write README"])
+        self.assertIn("Approval Required", output)
+        self.assertIn("filesystem.write", output)
+        self.assertIn("[a] approve  [d] deny  [enter] deny", output)
+        self.assertIn("approved", output)
+        self.assertIn("approval allowed=True; reason=approved by user", output)
+
     def test_tui_approval_panel_denies_on_enter(self):
         response = ConversationResponse(
             session_id="s1",

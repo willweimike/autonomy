@@ -1,10 +1,10 @@
 ---
 name: website-inspection
-description: Inspect a website by combining web extraction with browser snapshots when needed.
+description: Inspect a website by combining web search with browser snapshots when needed.
 version: 1.0.0
 tags: [web, browser, inspection]
 platforms: [macos, linux, windows]
-requires_tools: [web.extract, web.links, browser.navigate, browser.snapshot, browser.screenshot, browser.get_images, browser.console, browser.dialog]
+requires_tools: [web.search, browser.navigate, browser.snapshot, browser.screenshot, browser.get_images, browser.console, browser.dialog]
 ---
 
 # Website Inspection
@@ -13,9 +13,8 @@ Use this procedure when the user asks to inspect, summarize, or verify the state
 of a website.
 
 Workflow:
-- Use `web.extract` first for static page content.
-- Use `web.links` to inspect page navigation or choose a relevant follow-up
-  URL without opening a browser.
+- Use `web.search` first when the target URL is unknown or the user asks for
+  general public information about a website.
 - Use `browser.navigate` and `browser.snapshot` only if the page requires
   rendering, interaction, or visual page state.
 - Keep browser snapshots compact first; request `full=true` or a larger
@@ -43,5 +42,5 @@ Pitfalls:
 
 Outcome checks:
 - The final evidence should include the inspected URL and relevant content.
-- If browser tools are unavailable, continue with web extraction or report the
+- If browser tools are unavailable, continue with web search or report the
   limitation.

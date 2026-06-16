@@ -230,7 +230,9 @@ class AutonomyTUI:
         )
 
     def _install_approval_panel(self) -> None:
-        factory = getattr(self.shell.conversation, "agent_loop_factory", None)
+        factory = getattr(self.shell, "agent_loop_factory", None)
+        if not callable(factory):
+            factory = getattr(self.shell.conversation, "agent_loop_factory", None)
         if not callable(factory):
             return
 
@@ -241,6 +243,8 @@ class AutonomyTUI:
                 action_gateway.approval = ApprovalPolicy(prompt=self._approval_prompt)
             return agent_loop
 
+        if hasattr(self.shell, "agent_loop_factory"):
+            self.shell.agent_loop_factory = wrapped_factory
         self.shell.conversation.agent_loop_factory = wrapped_factory
 
     def _run_conversation_turn(self, text: str) -> None:

@@ -1013,7 +1013,7 @@ def run_task():
                 ToolsetConfiguration(enabled_toolsets=("browser", "web")),
             )
 
-        self.assertEqual(sorted(registry.names), ["web.extract", "web.fetch", "web.links"])
+        self.assertEqual(sorted(registry.names), ["web.search"])
 
     def test_disabled_individual_tool_is_not_available(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1827,7 +1827,7 @@ shutil.move(str(path), str(destination / path.name))
         self.assertIn("output_mode must be content, files_only, or count", output_mode_reason)
         self.assertIn("context must be at least 0", context_reason)
 
-    def test_web_tools_fetch_and_extract_local_http(self):
+    def test_web_search_parses_duckduckgo_html_results(self):
         class Headers:
             def get_content_charset(self):
                 return "utf-8"
@@ -1847,18 +1847,17 @@ shutil.move(str(path), str(destination / path.name))
 
             def read(self, size=-1):
                 body = (
-                    "<html><head><title>Example Page</title>"
-                    "<style>.x{}</style><script>ignored()</script></head>"
-                    "<body><h1>Hello Web</h1><p>needle text</p>"
-                    "<a href='/docs'>Docs</a>"
-                    "<a href='https://other.test/api'>API</a>"
-                    "<a href='/docs'>Duplicate Docs</a>"
+                    "<html><body>"
+                    "<a class='result__a' href='https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Fone'>One Result</a>"
+                    "<a class='result__snippet'>First snippet</a>"
+                    "<a class='result__a' href='https://example.test/two'>Two Result</a>"
+                    "<div class='result__snippet'>Second snippet</div>"
                     "</body></html>"
                 ).encode("utf-8")
                 return body if size < 0 else body[:size]
 
             def geturl(self):
-                return "https://example.test/"
+                return "https://duckduckgo.com/html/?q=example"
 
         with (
             tempfile.TemporaryDirectory() as tmpdir,
@@ -1868,52 +1867,26 @@ shutil.move(str(path), str(destination / path.name))
                 tmpdir,
                 ToolsetConfiguration(enabled_toolsets=("web",)),
             )
-            fetched = registry.execute(
+            searched = registry.execute(
                 Action(
-                    "web.fetch",
-                    {"url": "https://example.test/", "max_chars": 32},
-                    "fetch",
-                    "verify",
-                )
-            )
-            extracted = registry.execute(
-                Action(
-                    "web.extract",
-                    {"url": "https://example.test/"},
-                    "extract",
-                    "verify",
-                )
-            )
-            links = registry.execute(
-                Action(
-                    "web.links",
-                    {"url": "https://example.test/", "max_links": 1},
-                    "links",
+                    "web.search",
+                    {"query": "example", "limit": 2},
+                    "search",
                     "verify",
                 )
             )
 
-        fetch_payload = json.loads(fetched.output)
-        extract_payload = json.loads(extracted.output)
-        links_payload = json.loads(links.output)
-        self.assertTrue(fetched.succeeded)
-        self.assertEqual(fetch_payload["status"], 200)
-        self.assertTrue(fetch_payload["truncated"])
-        self.assertTrue(extracted.succeeded)
-        self.assertEqual(extract_payload["title"], "Example Page")
-        self.assertIn("Hello Web", extract_payload["text"])
-        self.assertIn("needle text", extract_payload["text"])
-        self.assertNotIn("ignored", extract_payload["text"])
-        self.assertTrue(links.succeeded)
-        self.assertEqual(links_payload["title"], "Example Page")
-        self.assertEqual(
-            links_payload["links"],
-            [{"url": "https://example.test/docs", "text": "Docs"}],
-        )
-        self.assertEqual(links_payload["count"], 1)
-        self.assertTrue(links_payload["truncated"])
+        payload = json.loads(searched.output)
+        self.assertTrue(searched.succeeded)
+        self.assertEqual(payload["query"], "example")
+        self.assertEqual(payload["status"], 200)
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["results"][0]["rank"], 1)
+        self.assertEqual(payload["results"][0]["title"], "One Result")
+        self.assertEqual(payload["results"][0]["url"], "https://example.test/one")
+        self.assertEqual(payload["results"][0]["snippet"], "First snippet")
 
-    def test_web_tools_redact_secret_like_urls_and_body(self):
+    def test_web_search_redacts_secret_like_urls_and_snippets(self):
         secret = "sk-websecretvalue1234567890"
 
         class Headers:
@@ -1935,15 +1908,15 @@ shutil.move(str(path), str(destination / path.name))
 
             def read(self, size=-1):
                 body = (
-                    f"<html><head><title>Secret</title></head><body>"
-                    f"<p>OPENAI_API_KEY={secret}</p>"
-                    f"<a href='/next?token={secret}'>Next</a>"
+                    f"<html><body>"
+                    f"<a class='result__a' href='https://example.test/?token={secret}'>Secret Result</a>"
+                    f"<a class='result__snippet'>OPENAI_API_KEY={secret}</a>"
                     f"</body></html>"
                 ).encode("utf-8")
                 return body if size < 0 else body[:size]
 
             def geturl(self):
-                return f"https://example.test/?api_key={secret}"
+                return f"https://duckduckgo.com/html/?q=secret&api_key={secret}"
 
         with (
             tempfile.TemporaryDirectory() as tmpdir,
@@ -1953,49 +1926,36 @@ shutil.move(str(path), str(destination / path.name))
                 tmpdir,
                 ToolsetConfiguration(enabled_toolsets=("web",)),
             )
-            fetched = registry.execute(
-                Action("web.fetch", {"url": "https://example.test/"}, "fetch", "verify")
-            )
-            extracted = registry.execute(
-                Action("web.extract", {"url": "https://example.test/"}, "extract", "verify")
-            )
-            links = registry.execute(
-                Action("web.links", {"url": "https://example.test/"}, "links", "verify")
+            searched = registry.execute(
+                Action("web.search", {"query": "secret"}, "search", "verify")
             )
 
-        combined = "\n".join(
-            [
-                fetched.output,
-                extracted.output,
-                links.output,
-                *fetched.evidence,
-                *extracted.evidence,
-                *links.evidence,
-            ]
-        )
-        links_payload = json.loads(links.output)
-        self.assertTrue(fetched.succeeded)
-        self.assertTrue(extracted.succeeded)
-        self.assertTrue(links.succeeded)
+        combined = "\n".join([searched.output, *searched.evidence])
+        payload = json.loads(searched.output)
+        self.assertTrue(searched.succeeded)
         self.assertNotIn(secret, combined)
-        self.assertIn("OPENAI_API_KEY=***", fetched.output)
-        self.assertIn("api_key=***", fetched.output)
-        self.assertIn("token=***", links_payload["links"][0]["url"])
-        self.assertIn("web_redacted:true", fetched.evidence)
-        self.assertIn("web_redacted:true", extracted.evidence)
-        self.assertIn("web_redacted:true", links.evidence)
+        self.assertIn("OPENAI_API_KEY=***", searched.output)
+        self.assertIn("api_key=***", searched.output)
+        self.assertIn("token=***", payload["results"][0]["url"])
+        self.assertIn("web_redacted:true", searched.evidence)
 
-    def test_web_tools_reject_non_http_url(self):
+    def test_web_search_validates_query_and_reports_network_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             registry = build_local_tool_registry(
                 tmpdir,
                 ToolsetConfiguration(enabled_toolsets=("web",)),
             )
             reason = registry.rejection_reason(
-                ActionIntent("web.fetch", {"url": "file:///tmp/example"}, "fetch")
+                ActionIntent("web.search", {"query": ""}, "search")
             )
+            with patch("urllib.request.urlopen", side_effect=OSError("network down")):
+                failed = registry.execute(
+                    Action("web.search", {"query": "example"}, "search", "verify")
+                )
 
-        self.assertIn("url must use http or https", reason)
+        self.assertIn("query must not be empty", reason)
+        self.assertFalse(failed.succeeded)
+        self.assertIn("web search failed", failed.error)
 
     def test_browser_tools_are_hidden_when_unavailable(self):
         with (

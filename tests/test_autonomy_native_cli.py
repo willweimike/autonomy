@@ -841,7 +841,7 @@ requires_tools: [filesystem.read]
             web_row = next(row for row in status if row["name"] == "web")
             browser_row = next(row for row in status if row["name"] == "browser")
             self.assertTrue(web_row["enabled"])
-            self.assertEqual(web_row["available_tools"], ["web.fetch", "web.extract", "web.links"])
+            self.assertEqual(web_row["available_tools"], ["web.search"])
             self.assertTrue(browser_row["enabled"])
             self.assertTrue(browser_row["implemented"])
             self.assertEqual(browser_row["available_tools"], [])
