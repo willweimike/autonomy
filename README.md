@@ -38,7 +38,7 @@ a runtime dependency.
 ## Requirements
 
 - Python 3.13+
-- Ollama, an OpenAI API key, or an NVIDIA API key for live model-generated candidates
+- Ollama or an API key for a supported OpenAI-compatible provider
 
 ## Commands
 
@@ -50,6 +50,8 @@ python3.13 -m autonomy model setup
 python3.13 -m autonomy model setup ollama
 python3.13 -m autonomy model setup openai-api
 python3.13 -m autonomy model setup nvidia
+python3.13 -m autonomy model setup openrouter
+python3.13 -m autonomy model setup deepseek
 python3.13 -m autonomy --db /tmp/autonomy.db doctor
 python3.13 -m autonomy run "Analyze why this project's tests fail" --workspace .
 python3.13 -m autonomy inspect RUN_ID
@@ -109,11 +111,12 @@ Session commands:
 
 ## Model Provider Setup
 
-The system supports `ollama`, `openai-api`, and `nvidia`. Run
-`autonomy model setup` from the workspace to choose a provider, endpoint, and
-model. Re-running setup is the only way to switch that workspace's provider or
-model. The interactive setup shows the current configuration and accepts either
-numbered selections or provider/model names.
+The system supports `ollama` plus OpenAI-compatible providers: `openai-api`,
+`nvidia`, `openrouter`, `deepseek`, `xai`, `zai`, `kimi-coding`, and `alibaba`.
+Run `autonomy model setup` from the workspace to choose a provider, endpoint,
+and model. Re-running setup is the only way to switch that workspace's provider
+or model. The interactive setup shows the current configuration and accepts
+either numbered selections or provider/model names.
 
 Validated workspace configuration is stored under:
 
@@ -156,6 +159,21 @@ The default NVIDIA endpoint is `https://integrate.api.nvidia.com/v1`, the
 default model is `moonshotai/kimi-k2.6`, and the API key is stored as
 `NVIDIA_API_KEY` in the workspace `.autonomy/.env` file.
 
+### Other OpenAI-Compatible Providers
+
+```bash
+autonomy model setup openrouter
+autonomy model setup deepseek
+autonomy model setup xai
+autonomy model setup zai
+autonomy model setup kimi-coding
+autonomy model setup alibaba
+```
+
+Provider API keys are stored in `.autonomy/.env` using the provider's native
+environment variable name, such as `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`,
+`XAI_API_KEY`, `GLM_API_KEY`, `KIMI_API_KEY`, or `DASHSCOPE_API_KEY`.
+
 ## Project Context
 
 At run start, Autonomy loads the first workspace guidance file it finds from:
@@ -194,22 +212,24 @@ Inspect or change toolset exposure with:
 
 ```bash
 autonomy tools status
+autonomy tools enable project
 autonomy tools enable browser
 autonomy tools disable terminal
 ```
 
-The catalog includes implemented `browser` toolsets plus planned Hermes-like
-toolsets such as `memory`, `delegate`, `cronjob`, and `computer_use`. Planned
-or unavailable tools are not exposed to the agent loop. Enabling a toolset only
-controls which implemented and available tools are visible to planning; it does
-not grant extra permissions or bypass `ActionGateway`.
+The catalog includes implemented `project` and `browser` toolsets plus planned
+Hermes-like toolsets such as `memory`, `delegate`, `cronjob`, and
+`computer_use`. Planned or unavailable tools are not exposed to the agent loop.
+Enabling a toolset only controls which implemented and available tools are
+visible to planning; it does not grant extra permissions or bypass
+`ActionGateway`.
 
 Tool implementation code is grouped under `autonomy/tools/`:
 
 - `autonomy/tools/registry.py`: `ToolSpec`, `ToolRegistry`, and `ApprovalPolicy`
 - `autonomy/tools/local.py`: local registry assembly plus file/search/shell tools
 - `autonomy/tools/toolsets/`: toolset-specific implementations such as
-  `browser` and `process`
+  `project`, `browser`, and `process`
 
 The first implemented local software-engineering tools are:
 
@@ -237,6 +257,14 @@ The first implemented local software-engineering tools are:
 - `process.log`
 - `process.wait`
 - `process.stop`
+- `git.status`
+- `git.diff`
+- `git.log`
+- `git.show`
+- `json.parse`
+- `yaml.parse`
+- `project.detect`
+- `python.test_discover`
 
 `filesystem.read` supports line pagination with optional `offset` and `limit`.
 Small files still return raw text. Large or explicitly paginated reads return
@@ -307,6 +335,11 @@ use; non-interactive runs reject them by default.
 from flooding the model context. Shell and managed process output also redacts
 common API keys, bearer tokens, credential assignments, and private key blocks
 before observations are written to the run journal.
+
+The implemented `project` toolset is read-only and opt-in. It adds bounded
+project-inspection helpers for git state, recent commits, commit summaries,
+JSON/YAML validation, manifest detection, and Python test command discovery.
+Use `autonomy tools enable project` before exposing these tools to planning.
 
 The implemented browser tools use headless Chromium through Playwright:
 

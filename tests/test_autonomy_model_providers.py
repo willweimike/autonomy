@@ -53,6 +53,37 @@ class AutonomyModelProviderTest(unittest.TestCase):
         self.assertEqual(spec.api_key_name, "NVIDIA_API_KEY")
         self.assertFalse(spec.supports_model_listing)
 
+    def test_hermes_openai_compatible_provider_specs_are_available(self):
+        expected = {
+            "openrouter": (
+                "https://openrouter.ai/api/v1",
+                "OPENROUTER_API_KEY",
+                "anthropic/claude-sonnet-4.6",
+            ),
+            "deepseek": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", "deepseek-chat"),
+            "xai": ("https://api.x.ai/v1", "XAI_API_KEY", ""),
+            "zai": ("https://api.z.ai/api/paas/v4", "GLM_API_KEY", "glm-5"),
+            "kimi-coding": (
+                "https://api.moonshot.ai/v1",
+                "KIMI_API_KEY",
+                "kimi-k2-turbo-preview",
+            ),
+            "alibaba": (
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "DASHSCOPE_API_KEY",
+                "",
+            ),
+        }
+
+        for provider_id, (base_url, api_key_name, default_model) in expected.items():
+            with self.subTest(provider_id=provider_id):
+                spec = PROVIDER_SPECS[provider_id]
+                self.assertEqual(spec.default_base_url, base_url)
+                self.assertEqual(spec.api_key_name, api_key_name)
+                self.assertEqual(spec.default_model, default_model)
+                self.assertTrue(spec.requires_api_key)
+                self.assertTrue(spec.supports_model_listing)
+
     def test_nvidia_key_round_trips_without_openai_secret_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ModelConfigStore(Path(tmpdir))
@@ -70,6 +101,33 @@ class AutonomyModelProviderTest(unittest.TestCase):
             self.assertNotIn("nvidia-secret", store.config_path.read_text(encoding="utf-8"))
             self.assertIn("NVIDIA_API_KEY=", store.env_path.read_text(encoding="utf-8"))
             self.assertNotIn("AUTONOMY_OPENAI_API_KEY", store.env_path.read_text(encoding="utf-8"))
+
+    def test_hermes_provider_keys_round_trip_under_native_env_names(self):
+        for provider_id in (
+            "openrouter",
+            "deepseek",
+            "xai",
+            "zai",
+            "kimi-coding",
+            "alibaba",
+        ):
+            with self.subTest(provider_id=provider_id), tempfile.TemporaryDirectory() as tmpdir:
+                store = ModelConfigStore(Path(tmpdir))
+                spec = PROVIDER_SPECS[provider_id]
+                configuration = ModelConfiguration(
+                    provider_id,
+                    spec.default_model or "test-model",
+                    spec.default_base_url,
+                    spec.default_timeout,
+                )
+                store.save(configuration, api_key=f"{provider_id}-secret")
+
+                self.assertEqual(store.load_api_key(provider_id), f"{provider_id}-secret")
+                self.assertIn(f"{spec.api_key_name}=", store.env_path.read_text(encoding="utf-8"))
+                self.assertNotIn(
+                    f"{provider_id}-secret",
+                    store.config_path.read_text(encoding="utf-8"),
+                )
 
     def test_legacy_environment_variables_are_not_configuration_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.dict(

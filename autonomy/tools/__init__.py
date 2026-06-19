@@ -15,6 +15,7 @@ from .toolsets.browser import (
     register_browser_tools,
 )
 from .toolsets.process import ManagedProcess, ProcessManager, register_process_tools
+from .toolsets.project import register_project_tools
 
 __all__ = [
     "ApprovalPolicy",
@@ -30,4 +31,5 @@ __all__ = [
     "build_local_tool_registry",
     "register_browser_tools",
     "register_process_tools",
+    "register_project_tools",
 ]

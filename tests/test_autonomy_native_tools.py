@@ -954,6 +954,104 @@ def run_task():
             ),
         )
 
+    def test_project_toolset_exposes_read_only_project_tools_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+            (root / "pyproject.toml").write_text(
+                "[project]\nname = \"demo\"\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n",
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps({"scripts": {"test": "node --test", "dev": "vite"}}),
+                encoding="utf-8",
+            )
+            (root / "data.json").write_text("{\"ok\": true}\n", encoding="utf-8")
+            (root / "config.yaml").write_text("ok: true\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-c", "user.email=a@example.test", "-c", "user.name=A", "commit", "-m", "init"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            (root / "data.json").write_text("{\"ok\": false}\n", encoding="utf-8")
+            registry = build_local_tool_registry(
+                root,
+                ToolsetConfiguration(enabled_toolsets=("project",)),
+            )
+
+            self.assertEqual(
+                sorted(registry.names),
+                [
+                    "git.diff",
+                    "git.log",
+                    "git.show",
+                    "git.status",
+                    "json.parse",
+                    "project.detect",
+                    "python.test_discover",
+                    "yaml.parse",
+                ],
+            )
+            self.assertEqual(registry.spec("git.status").toolset, "project")
+            self.assertEqual(registry.spec("git.status").default_risk, RiskLevel.LOW)
+
+            status = registry.execute(Action("git.status", {}, "status", "verify"))
+            diff = registry.execute(Action("git.diff", {"max_chars": 80}, "diff", "verify"))
+            log = registry.execute(Action("git.log", {"limit": 1}, "log", "verify"))
+            show = registry.execute(Action("git.show", {"revision": "HEAD", "max_chars": 1000}, "show", "verify"))
+            parsed_json = registry.execute(Action("json.parse", {"path": "data.json"}, "json", "verify"))
+            parsed_yaml = registry.execute(Action("yaml.parse", {"path": "config.yaml"}, "yaml", "verify"))
+            detected = registry.execute(Action("project.detect", {}, "detect", "verify"))
+            tests = registry.execute(Action("python.test_discover", {}, "tests", "verify"))
+
+        self.assertTrue(status.succeeded)
+        self.assertIn("data.json", status.output)
+        self.assertTrue(diff.succeeded)
+        self.assertIn("truncated", diff.output)
+        self.assertTrue(log.succeeded)
+        self.assertIn("init", log.output)
+        self.assertTrue(show.succeeded)
+        self.assertIn("pyproject.toml", show.output)
+        self.assertEqual(json.loads(parsed_json.output)["parsed"], {"ok": False})
+        self.assertEqual(json.loads(parsed_yaml.output)["parsed"], {"ok": True})
+        self.assertTrue(any("pytest" in command for command in json.loads(tests.output)["commands"]))
+        detect_payload = json.loads(detected.output)
+        self.assertIn("pyproject.toml", detect_payload["manifests"])
+        self.assertIn("npm test", detect_payload["commands"]["test"])
+
+    def test_project_toolset_is_not_enabled_by_default_and_rejects_escaping_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            default_registry = build_local_tool_registry(tmpdir, ToolsetConfiguration())
+            project_registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("project",)),
+            )
+
+            reason = project_registry.rejection_reason(
+                ActionIntent("json.parse", {"path": "../outside.json"}, "escape")
+            )
+
+        self.assertNotIn("git.status", default_registry.names)
+        self.assertIn("path escapes workspace", reason)
+
+    def test_project_toolset_catalog_lists_all_implemented_project_tools(self):
+        project_toolset = next(definition for definition in TOOLSET_CATALOG if definition.name == "project")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("project",)),
+            )
+        implemented_project_tools = {
+            name
+            for name in registry.names
+            if registry.spec(name).toolset == "project"
+        }
+
+        self.assertEqual(set(project_toolset.tools), implemented_project_tools)
+
     def test_file_toolset_catalog_lists_all_implemented_file_tools(self):
         file_toolset = next(definition for definition in TOOLSET_CATALOG if definition.name == "file")
         with tempfile.TemporaryDirectory() as tmpdir:
