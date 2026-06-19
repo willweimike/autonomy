@@ -14,10 +14,8 @@ through `ActionGateway`, so future loops can propose or initiate action while
 sharing the same governed execution boundary.
 
 ```text
-SessionShell -> ConversationLoop -> ConversationRouter
-ConversationRouter -> ChatResponder
-ConversationRouter -> AgentLoop -> ActionGateway -> ToolRegistry
-AgentLoop -> TaskResponder
+SessionShell -> ConversationLoop -> AgentLoop -> ActionGateway -> ToolRegistry
+AgentLoop -> ConversationResponder
 autonomy run -> AgentLoop -> ActionGateway -> ToolRegistry
 AgentLoop -> OutcomeEvaluator
 AgentLoop -> LearningLoop -> CuratorDaemon

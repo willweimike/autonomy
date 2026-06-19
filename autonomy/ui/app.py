@@ -269,9 +269,9 @@ class AutonomyTUI:
 
     def _render_response(self, response: ConversationResponse, *, turn_number: int | None = None) -> str:
         lines: list[str] = []
-        route_lines = self._route_lines(response)
-        if route_lines:
-            lines.extend(route_lines)
+        agent_mode_lines = self._agent_mode_lines(response)
+        if agent_mode_lines:
+            lines.extend(agent_mode_lines)
             lines.append("")
         reply = response.reply.strip() or "(empty response)"
         lines.extend(self._wrap_text(reply))
@@ -347,16 +347,16 @@ class AutonomyTUI:
             return "needs attention"
         return "stopped"
 
-    def _route_lines(self, response: ConversationResponse) -> list[str]:
+    def _agent_mode_lines(self, response: ConversationResponse) -> list[str]:
         decision = response.decision
         if decision is None:
             return []
         mode = getattr(decision.mode, "value", str(decision.mode))
-        lines = [f"route: {mode}"]
+        lines = [f"agent mode: {mode}"]
         if decision.task_goal:
             lines.append(f"task goal: {decision.task_goal}")
         if decision.reason:
-            lines.append(f"router reason: {decision.reason}")
+            lines.append(f"reason: {decision.reason}")
         return lines
 
     def _journal_for_run(self, run_id: str) -> dict[str, Any] | None:

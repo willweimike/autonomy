@@ -5,10 +5,8 @@ from pathlib import Path
 from autonomy import (
     ActionRecipe,
     AutonomyStore,
-    ConversationDecision,
     ConversationLoop,
     ConversationMode,
-    ModelConversationRouter,
     RunResult,
     TerminationReason,
 )
@@ -47,36 +45,10 @@ class RecordingAgentLoop:
         )
 
 
-class StaticRouter:
-    def __init__(self, decision):
-        self.decision = decision
-        self.calls = []
-
-    def route(self, conversation_context, user_input):
-        self.calls.append(
-            {
-                "conversation_context": conversation_context,
-                "user_input": user_input,
-            }
-        )
-        return self.decision
-
-
 class StaticResponder:
-    def __init__(self, chat_reply="chat reply", task_reply="task reply"):
-        self.chat_reply = chat_reply
+    def __init__(self, task_reply="task reply"):
         self.task_reply = task_reply
-        self.chat_calls = []
         self.task_calls = []
-
-    def respond_to_chat(self, conversation_context, user_input):
-        self.chat_calls.append(
-            {
-                "conversation_context": conversation_context,
-                "user_input": user_input,
-            }
-        )
-        return self.chat_reply
 
     def summarize_task_result(self, conversation_context, user_input, result):
         self.task_calls.append(
@@ -89,107 +61,8 @@ class StaticResponder:
         return self.task_reply
 
 
-TASK_ROUTER = StaticRouter(
-    ConversationDecision(
-        mode=ConversationMode.TASK,
-        task_goal="",
-        reason="test task",
-    )
-)
-
-
 class ConversationLoopTest(unittest.TestCase):
-    def test_model_router_uses_model_for_explicit_url_navigation(self):
-        class RouterModel:
-            def __init__(self):
-                self.calls = []
-
-            def classify_conversation_turn(self, conversation_context, user_input):
-                self.calls.append((conversation_context, user_input))
-                return ConversationDecision(
-                    ConversationMode.TASK,
-                    task_goal=user_input,
-                    reason="model classified URL navigation",
-                )
-
-        model = RouterModel()
-        decision = ModelConversationRouter(model).route(
-            "",
-            "navigate https://zh.wikipedia.org/, and tell me what page is this",
-        )
-
-        self.assertEqual(decision.mode, ConversationMode.TASK)
-        self.assertEqual(
-            decision.task_goal,
-            "navigate https://zh.wikipedia.org/, and tell me what page is this",
-        )
-        self.assertEqual(decision.reason, "model classified URL navigation")
-        self.assertEqual(
-            model.calls,
-            [("", "navigate https://zh.wikipedia.org/, and tell me what page is this")],
-        )
-
-    def test_model_router_keeps_model_decision_with_task_goal(self):
-        class RouterModel:
-            def classify_conversation_turn(self, conversation_context, user_input):
-                del conversation_context, user_input
-                return ConversationDecision(
-                    ConversationMode.CHAT,
-                    task_goal="identify https://zh.wikipedia.org/",
-                    reason="user_initiated",
-                )
-
-        decision = ModelConversationRouter(RouterModel()).route(
-            "",
-            "what page is this?",
-        )
-
-        self.assertEqual(decision.mode, ConversationMode.CHAT)
-        self.assertEqual(decision.task_goal, "identify https://zh.wikipedia.org/")
-        self.assertEqual(decision.reason, "user_initiated")
-
-    def test_model_router_keeps_plain_greeting_as_chat(self):
-        class RouterModel:
-            def classify_conversation_turn(self, conversation_context, user_input):
-                del conversation_context, user_input
-                return ConversationDecision(ConversationMode.CHAT, reason="greeting")
-
-        decision = ModelConversationRouter(RouterModel()).route("", "hello")
-
-        self.assertEqual(decision.mode, ConversationMode.CHAT)
-        self.assertEqual(decision.task_goal, "")
-
-    def test_model_router_asks_model_even_for_greeting(self):
-        class RouterModel:
-            def __init__(self):
-                self.calls = []
-
-            def classify_conversation_turn(self, conversation_context, user_input):
-                self.calls.append(
-                    {
-                        "conversation_context": conversation_context,
-                        "user_input": user_input,
-                    }
-                )
-                return ConversationDecision(
-                    mode=ConversationMode.CHAT,
-                    reason="model decision",
-                )
-
-        model = RouterModel()
-        decision = ModelConversationRouter(model).route("", "hello")
-
-        self.assertEqual(model.calls, [{"conversation_context": "", "user_input": "hello"}])
-        self.assertEqual(decision.mode, ConversationMode.CHAT)
-        self.assertEqual(decision.reason, "model decision")
-
     def test_chat_like_input_still_runs_agent_loop(self):
-        router = StaticRouter(
-            ConversationDecision(
-                mode=ConversationMode.CHAT,
-                reason="model classified chat",
-            )
-        )
         responder = StaticResponder(task_reply="你好，我可以陪你聊，也可以協助執行任務。")
         with tempfile.TemporaryDirectory() as tmpdir:
             store = AutonomyStore(Path(tmpdir) / "autonomy.db")
@@ -199,7 +72,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=4,
                 agent_loop_factory=lambda workspace, db_path: agent_loop,
-                router=router,
                 responder=responder,
                 store=store,
                 session_id="session",
@@ -228,7 +100,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=4,
                 agent_loop_factory=lambda workspace, db_path: agent_loop,
-                router=TASK_ROUTER,
                 responder=StaticResponder(),
                 store=store,
                 session_id="session",
@@ -288,7 +159,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=4,
                 agent_loop_factory=lambda _workspace, _db_path: AssistantRespondAgentLoop(store),
-                router=TASK_ROUTER,
                 responder=StaticResponder(task_reply="summary should not be used"),
                 store=store,
                 session_id="session",
@@ -364,7 +234,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=4,
                 agent_loop_factory=lambda workspace, db_path: RecipeCandidateAgentLoop(store),
-                router=TASK_ROUTER,
                 responder=StaticResponder(),
                 store=store,
                 session_id="session",
@@ -377,14 +246,7 @@ class ConversationLoopTest(unittest.TestCase):
             ["new-0", "new-1", "new-2"],
         )
 
-    def test_router_task_goal_does_not_rewrite_user_input_before_agent_loop(self):
-        router = StaticRouter(
-            ConversationDecision(
-                    mode=ConversationMode.TASK,
-                    task_goal="inspect repository architecture",
-                    reason="explicit project task",
-                )
-        )
+    def test_user_input_goes_to_agent_loop_unchanged(self):
         responder = StaticResponder(task_reply="我已完成專案架構分析。")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -395,7 +257,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=4,
                 agent_loop_factory=lambda workspace, db_path: agent_loop,
-                router=router,
                 responder=responder,
                 store=store,
                 session_id="session",
@@ -417,7 +278,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=Path(tmpdir) / "autonomy.db",
                 max_steps=3,
                 agent_loop_factory=lambda workspace, db_path: agent_loop,
-                router=TASK_ROUTER,
                 responder=StaticResponder(task_reply="handled"),
                 store=store,
                 session_id="session",
@@ -451,7 +311,6 @@ class ConversationLoopTest(unittest.TestCase):
                 db_path=root / "autonomy.db",
                 max_steps=2,
                 agent_loop_factory=factory,
-                router=TASK_ROUTER,
                 responder=StaticResponder(),
                 store=store,
                 session_id="session",

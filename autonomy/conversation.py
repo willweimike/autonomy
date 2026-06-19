@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from .conversation_responder import ConversationResponder
-from .conversation_router import ConversationRouter
 from .models import ConversationDecision, ConversationMode, ConversationResponse, ConversationTurn, RunResult, TerminationReason
 from .providers import ModelClientError, ProviderConfigurationError
 from .store import AutonomyStore
@@ -37,7 +36,6 @@ class ConversationLoop:
         db_path: Path,
         max_steps: int,
         agent_loop_factory: AgentLoopFactory,
-        router: ConversationRouter,
         responder: ConversationResponder,
         store: AutonomyStore | None = None,
         session_id: str | None = None,
@@ -54,7 +52,6 @@ class ConversationLoop:
         self.db_path = db_path
         self.max_steps = max_steps
         self.agent_loop_factory = agent_loop_factory
-        self.router = router
         self.responder = responder
         self.store = store or AutonomyStore(db_path)
         self.session_id = session_id or uuid.uuid4().hex

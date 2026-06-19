@@ -7,9 +7,6 @@ from .providers import ProviderConfigurationError
 
 
 class ConversationResponder(Protocol):
-    def respond_to_chat(self, conversation_context: str, user_input: str) -> str:
-        ...
-
     def summarize_task_result(
         self,
         conversation_context: str,
@@ -20,13 +17,10 @@ class ConversationResponder(Protocol):
 
 
 class ModelConversationResponder:
-    """Generate conversation text after routing or task execution has completed."""
+    """Generate conversation text after task execution has completed."""
 
     def __init__(self, model):
         self.model = model
-
-    def respond_to_chat(self, conversation_context: str, user_input: str) -> str:
-        return self.model.respond_to_chat(conversation_context, user_input)
 
     def summarize_task_result(
         self,
@@ -40,10 +34,6 @@ class ModelConversationResponder:
 class MissingModelConversationResponder:
     def __init__(self, error: ProviderConfigurationError):
         self.error = error
-
-    def respond_to_chat(self, conversation_context: str, user_input: str) -> str:
-        del conversation_context, user_input
-        raise self.error
 
     def summarize_task_result(
         self,

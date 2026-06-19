@@ -9,3 +9,4 @@ reference_hermes-agent/
 *.egg-info
 .Trash
 Icon
+.DS_Store
