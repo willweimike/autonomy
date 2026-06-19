@@ -46,6 +46,7 @@ from .storage import (
 from .store import AutonomyStore
 from .tools import ApprovalPolicy, build_local_tool_registry
 from .toolsets import (
+    ToolsetConfiguration,
     ToolsetConfigStore,
     ToolsetConfigurationError,
     toolset_catalog_status,
@@ -734,6 +735,7 @@ def doctor(
         if toolset_configuration
         else full_registry
     )
+    tool_statuses = full_registry.tool_statuses()
     checks = {
         "python_3_13_or_newer": sys.version_info >= (3, 13),
         "database_writable": database_writable,
@@ -760,8 +762,9 @@ def doctor(
         "enabled_toolsets": sorted(toolset_configuration.enabled_toolsets) if toolset_configuration else [],
         "toolsets": toolset_catalog_status(
             toolset_configuration,
-            full_registry.tool_statuses(),
+            tool_statuses,
         ) if toolset_configuration else [],
+        "web_readiness": _web_readiness(toolset_configuration, tool_statuses),
         "tools": sorted(registry.names),
     }
     try:
@@ -828,6 +831,24 @@ def _directory_writable(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def _web_readiness(
+    configuration: ToolsetConfiguration | None,
+    tool_statuses: dict[str, dict],
+) -> dict[str, str | bool]:
+    if configuration is None:
+        return {"ready": False, "status": "tool_config_invalid", "reason": "tool configuration is invalid"}
+    if "browser" not in configuration.enabled_set:
+        return {"ready": False, "status": "disabled", "reason": "browser toolset is disabled"}
+    status = tool_statuses.get("browser.navigate", {})
+    if status.get("available") is True:
+        return {"ready": True, "status": "ready", "reason": ""}
+    return {
+        "ready": False,
+        "status": "unavailable",
+        "reason": str(status.get("unavailable_reason") or "browser.navigate is unavailable"),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

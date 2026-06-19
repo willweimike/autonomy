@@ -102,6 +102,7 @@ class ProjectToolConfigurationTest(unittest.TestCase):
         configuration = ToolsetConfigStore(repo_root / ".autonomy").load()
 
         self.assertNotIn("web", configuration.enabled_toolsets)
+        self.assertIn("browser", configuration.enabled_toolsets)
         self.assertIn("file", configuration.enabled_toolsets)
         self.assertIn("search", configuration.enabled_toolsets)
         self.assertIn("terminal", configuration.enabled_toolsets)
@@ -124,6 +125,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertIn('"filesystem.read"', output.getvalue())
         self.assertIn('"tool_config_valid": true', output.getvalue())
         self.assertIn('"enabled_toolsets"', output.getvalue())
+        self.assertIn('"web_readiness"', output.getvalue())
 
     def test_doctor_reports_database_failure_without_traceback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -914,7 +916,7 @@ requires_tools: [filesystem.read]
             self.assertIn("shell.execute", terminal_row["available_tools"])
             self.assertIn("process.start", terminal_row["available_tools"])
             self.assertTrue(browser_row["implemented"])
-            self.assertFalse(browser_row["enabled"])
+            self.assertTrue(browser_row["enabled"])
             self.assertEqual(browser_row["available_tools"], [])
             self.assertEqual(browser_row["unavailable_tools"][0]["reason"], "missing browser")
 

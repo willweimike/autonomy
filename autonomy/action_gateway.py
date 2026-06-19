@@ -63,6 +63,7 @@ class ActionGateway:
                 "arguments": action.arguments,
                 "purpose": action.purpose,
                 "risk_level": action.risk_level.value,
+                "effective_risk_level": self.approval.effective_risk(action).value,
                 "expected_effect": action.expected_effect,
                 "verification_plan": action.verification_plan,
                 "tool_spec": self.tools.spec(action.tool).summary,

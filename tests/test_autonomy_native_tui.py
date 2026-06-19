@@ -146,11 +146,11 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("Skills guide candidate generation; ActionGateway governs execution", output)
         self.assertIn("Review queues:", output)
         self.assertIn(
-            "Autonomy · model unknown · tools unknown · max 5 · details compact · turn 0 · chat 0 task 0 · workspace",
+            "Autonomy · model unknown · tools unknown · max 5 · details compact · turn 0 · runs 0 · workspace",
             output,
         )
         self.assertIn(
-            "Autonomy · model unknown · tools unknown · max 5 · details compact · turn 1 · chat 1 task 0 · workspace",
+            "Autonomy · model unknown · tools unknown · max 5 · details compact · turn 1 · runs 0 · workspace",
             output,
         )
         self.assertIn("You #1", output)
@@ -161,8 +161,7 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("Hello. What would you like to work on?", output)
         self.assertIn("Session Closed", output)
         self.assertIn("turns:        1", output)
-        self.assertIn("chat turns:   1", output)
-        self.assertIn("task runs:    0", output)
+        self.assertIn("agent runs:   0", output)
         self.assertEqual(shell.commands, [])
 
     def test_tui_startup_renders_workspace_model_and_tool_status(self):
@@ -216,7 +215,7 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("model:    ollama/qwen2.5vl:7b", output)
         self.assertIn("toolsets: file, terminal; 1 disabled tool(s)", output)
         self.assertIn(
-            "Autonomy · ollama/qwen2.5vl:7b · tools file,terminal · max 5 · details compact · turn 0 · chat 0 task 0 · workspace",
+            "Autonomy · ollama/qwen2.5vl:7b · tools file,terminal · max 5 · details compact · turn 0 · runs 0 · workspace",
             output,
         )
 
@@ -292,11 +291,10 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("run_id:      run-1", output)
         self.assertIn("termination: achieved", output)
         self.assertIn("next:        /inspect run-1", output)
-        self.assertIn("chat 0 task 1", output)
+        self.assertIn("runs 1", output)
         self.assertIn("last run-1 achieved", output)
         self.assertIn("last run:     run-1 achieved", output)
-        self.assertIn("chat turns:   0", output)
-        self.assertIn("task runs:    1", output)
+        self.assertIn("agent runs:   1", output)
         self.assertIn("review queue: 1 ProcedureSkill candidate(s), 1 ActionRecipe candidate(s)", output)
         self.assertIn("Skill Review", output)
         self.assertIn("ActionRecipe Review", output)
@@ -457,6 +455,7 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertEqual(conversation.inputs, ["write README"])
         self.assertIn("Approval Required", output)
         self.assertIn("filesystem.write", output)
+        self.assertNotIn("[y/N]", output)
         self.assertIn("[a] approve  [d] deny  [enter] deny", output)
         self.assertIn("approved", output)
         self.assertIn("approval allowed=True; reason=approved by user", output)
@@ -555,9 +554,10 @@ class AutonomyTUITest(unittest.TestCase):
                         "step": 1,
                         "event_type": "action_selected",
                         "payload": {
-                            "tool": "filesystem.read",
+                            "tool": "shell.execute",
                             "risk_level": "low",
-                            "purpose": "read project overview",
+                            "effective_risk_level": "high",
+                            "purpose": "fetch page",
                         },
                     },
                     {
@@ -601,19 +601,19 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("Run dashboard:", output)
         self.assertIn("skills: systematic-debugging", output)
         self.assertIn("candidates: 1 ranked; 1 blocked by boundary", output)
-        self.assertIn("selected action: filesystem.read [low]", output)
+        self.assertIn("selected action: shell.execute [high]", output)
         self.assertIn("approval: allowed", output)
         self.assertIn("observation: succeeded", output)
         self.assertIn("outcome: achieved (1.0)", output)
         self.assertIn("Action trail:", output)
         self.assertIn(
-            "step 1: 1 candidate(s) blocked -> filesystem.read [low] · read project overview -> approval allowed -> observation succeeded -> outcome achieved (1.0)",
+            "step 1: 1 candidate(s) blocked -> shell.execute [high] · fetch page -> approval allowed -> observation succeeded -> outcome achieved (1.0)",
             output,
         )
         self.assertIn("Run timeline:", output)
         self.assertIn("step 0: run started via tui", output)
         self.assertIn("candidates ranked: 1 · top: filesystem.read", output)
-        self.assertIn("action selected: filesystem.read [low] · read project overview", output)
+        self.assertIn("action selected: shell.execute [high] · fetch page", output)
         self.assertIn("outcome: achieved (1.0) · README was summarized", output)
 
     def test_tui_compact_details_hides_run_timeline_by_default(self):
@@ -805,8 +805,8 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertIn("current mode: compact", output)
         self.assertIn("details mode: full", output)
         self.assertIn("details mode: compact", output)
-        self.assertIn("details full · turn 0 · chat 0 task 0", output)
-        self.assertIn("details compact · turn 0 · chat 0 task 0", output)
+        self.assertIn("details full · turn 0 · runs 0", output)
+        self.assertIn("details compact · turn 0 · runs 0", output)
         self.assertIn("usage: /details compact", output)
         self.assertIn("Session Closed", output)
         self.assertIn("details mode: compact", output)
@@ -826,8 +826,7 @@ class AutonomyTUITest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("Session Closed", output)
         self.assertIn("turns:        0", output)
-        self.assertIn("chat turns:   0", output)
-        self.assertIn("task runs:    0", output)
+        self.assertIn("agent runs:   0", output)
         self.assertIn("details mode: compact", output)
         self.assertIn("last run:     none", output)
         self.assertIn("workspace:    /workspace", output)

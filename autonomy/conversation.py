@@ -6,7 +6,7 @@ from typing import Callable, Protocol
 
 from .conversation_responder import ConversationResponder
 from .conversation_router import ConversationRouter
-from .models import ConversationMode, ConversationResponse, ConversationTurn, RunResult, TerminationReason
+from .models import ConversationDecision, ConversationMode, ConversationResponse, ConversationTurn, RunResult, TerminationReason
 from .providers import ModelClientError, ProviderConfigurationError
 from .store import AutonomyStore
 
@@ -88,33 +88,12 @@ class ConversationLoop:
             )
         )
 
-        decision = self.router.route(conversation_context, goal)
-        if decision.mode == ConversationMode.CHAT:
-            reply = self._safe_chat_reply(conversation_context, goal)
-            assistant_turn_id = uuid.uuid4().hex
-            self.store.record_conversation_turn(
-                ConversationTurn(
-                    id=assistant_turn_id,
-                    session_id=self.session_id,
-                    role="assistant",
-                    content=reply,
-                    metadata={
-                        "mode": decision.mode.value,
-                        "reason": decision.reason,
-                    },
-                )
-            )
-            return ConversationResponse(
-                session_id=self.session_id,
-                user_turn_id=user_turn_id,
-                assistant_turn_id=assistant_turn_id,
-                run_result=None,
-                reply=reply,
-                conversation_context=conversation_context,
-                decision=decision,
-            )
-
-        task_goal = decision.task_goal.strip() or goal
+        decision = ConversationDecision(
+            mode=ConversationMode.TASK,
+            task_goal=goal,
+            reason="agent turn",
+        )
+        task_goal = goal
         agent_loop = self.agent_loop_factory(self.workspace, self.db_path)
         result = agent_loop.run(
             task_goal,
@@ -215,12 +194,6 @@ class ConversationLoop:
                 break
         return candidates
 
-    def _safe_chat_reply(self, conversation_context: str, user_input: str) -> str:
-        try:
-            return self.responder.respond_to_chat(conversation_context, user_input)
-        except (ModelClientError, ProviderConfigurationError, ValueError) as exc:
-            return f"conversation response error: {exc}"
-
     def _format_task_reply(
         self,
         result: RunResult,
@@ -230,6 +203,9 @@ class ConversationLoop:
         user_input: str,
     ) -> str:
         del decision
+        assistant_response = self._assistant_response_for_run(result.run_id)
+        if assistant_response:
+            return assistant_response
         if result.termination == TerminationReason.FAILED and result.steps_executed == 0:
             summary = (
                 "I could not start the task because the model did not return valid structured "
@@ -253,3 +229,23 @@ class ConversationLoop:
                 f"steps: {result.steps_executed}",
             ]
         )
+
+    def _assistant_response_for_run(self, run_id: str) -> str:
+        try:
+            journal = self.store.inspect_run(run_id)
+        except KeyError:
+            return ""
+        selected_assistant_response = False
+        for event in journal["events"]:
+            event_type = event["event_type"]
+            payload = event["payload"]
+            if event_type == "action_selected" and isinstance(payload, dict):
+                selected_assistant_response = payload.get("tool") == "assistant.respond"
+            elif (
+                selected_assistant_response
+                and event_type == "observation"
+                and isinstance(payload, dict)
+                and payload.get("succeeded") is True
+            ):
+                return str(payload.get("output", "")).strip()
+        return ""

@@ -41,6 +41,14 @@ class DeterministicOutcomeEvaluator:
                 evidence=observation.evidence,
                 confidence=1.0,
             )
+        if action.tool == "assistant.respond":
+            return Outcome(
+                execution_ok=True,
+                goal_status=GoalStatus.ACHIEVED,
+                reason="assistant response returned",
+                evidence=observation.evidence,
+                confidence=1.0,
+            )
         return Outcome(
             execution_ok=True,
             goal_status=GoalStatus.CONTINUE,

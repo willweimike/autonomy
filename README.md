@@ -70,24 +70,23 @@ python3.13 -m autonomy skills disable SKILL_NAME
 
 ## Interactive Session
 
-`autonomy` and `autonomy tui` start the terminal UI. Natural language input first flows
-through a model router that only decides `chat` or `task`. Chat turns then go
-to a separate responder that produces the natural reply without creating a
-`run_id` or executing tools. Clear task requests flow into `AgentLoop`, where
-each run gets a separate `run_id` and journal; a task responder then turns the
-run result into a conversational summary with compact metadata. The
-conversation session keeps the recent transcript and linked run summaries
-available as context for follow-up requests. `autonomy run "goal"` remains
-available for one-shot tasks and automation, and always treats the input as a
-task.
+`autonomy` and `autonomy tui` start the terminal UI. Natural language input now
+flows directly into `AgentLoop`; there is no pre-agent `chat`/`task` classifier
+that can stop a task before governance runs. The model can either choose
+governed tools or return a direct answer through `assistant.respond`, which is
+still journaled as a low-risk action. Each turn gets a `run_id`, `ActionGateway`
+authorization, outcome evaluation, and audit trail. The conversation session
+keeps the recent transcript and linked run summaries available as context for
+follow-up requests. `autonomy run "goal"` remains available for one-shot tasks
+and automation, and uses the same agent loop.
 
 The TUI wraps the same `ConversationLoop`. It renders a responsive startup banner, a session overview
 panel, explicit runtime boundary notes, a compact status rule before each prompt
-with turn count, chat/task mix, and last-run state, transcript-style response
-panels, route classification, run metadata, an Action trail derived from the run
-journal, a toggleable compact/full details mode, a `/` command palette, and
-skill review queues while keeping the same runtime boundaries: the UI never
-executes tools directly, and all task actions still go through
+with turn count, run state, transcript-style response panels, route metadata,
+run metadata, an Action trail derived from the run journal, a toggleable
+compact/full details mode, a `/` command palette, and skill review queues while
+keeping the same runtime boundaries: the UI never executes tools directly, and
+all actions still go through
 `AgentLoop -> ActionGateway -> ToolRegistry`.
 
 Session commands:

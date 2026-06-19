@@ -366,6 +366,10 @@ class AutonomyNativeModelTest(unittest.TestCase):
             )
 
         user_payload = json.loads(captured["messages"][1]["content"])
+        system_prompt = captured["messages"][0]["content"]
+        self.assertIn("For website or page tasks, prefer browser tools", system_prompt)
+        self.assertIn("Do not use shell.execute for web navigation or web fetches", system_prompt)
+        self.assertIn("Use assistant.respond", system_prompt)
         self.assertEqual(user_payload["available_tools"], ["browser.navigate", "search.text"])
         self.assertEqual(
             user_payload["tool_contracts"]["search.text"],

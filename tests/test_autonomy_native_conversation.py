@@ -99,6 +99,66 @@ TASK_ROUTER = StaticRouter(
 
 
 class ConversationLoopTest(unittest.TestCase):
+    def test_model_router_uses_model_for_explicit_url_navigation(self):
+        class RouterModel:
+            def __init__(self):
+                self.calls = []
+
+            def classify_conversation_turn(self, conversation_context, user_input):
+                self.calls.append((conversation_context, user_input))
+                return ConversationDecision(
+                    ConversationMode.TASK,
+                    task_goal=user_input,
+                    reason="model classified URL navigation",
+                )
+
+        model = RouterModel()
+        decision = ModelConversationRouter(model).route(
+            "",
+            "navigate https://zh.wikipedia.org/, and tell me what page is this",
+        )
+
+        self.assertEqual(decision.mode, ConversationMode.TASK)
+        self.assertEqual(
+            decision.task_goal,
+            "navigate https://zh.wikipedia.org/, and tell me what page is this",
+        )
+        self.assertEqual(decision.reason, "model classified URL navigation")
+        self.assertEqual(
+            model.calls,
+            [("", "navigate https://zh.wikipedia.org/, and tell me what page is this")],
+        )
+
+    def test_model_router_keeps_model_decision_with_task_goal(self):
+        class RouterModel:
+            def classify_conversation_turn(self, conversation_context, user_input):
+                del conversation_context, user_input
+                return ConversationDecision(
+                    ConversationMode.CHAT,
+                    task_goal="identify https://zh.wikipedia.org/",
+                    reason="user_initiated",
+                )
+
+        decision = ModelConversationRouter(RouterModel()).route(
+            "",
+            "what page is this?",
+        )
+
+        self.assertEqual(decision.mode, ConversationMode.CHAT)
+        self.assertEqual(decision.task_goal, "identify https://zh.wikipedia.org/")
+        self.assertEqual(decision.reason, "user_initiated")
+
+    def test_model_router_keeps_plain_greeting_as_chat(self):
+        class RouterModel:
+            def classify_conversation_turn(self, conversation_context, user_input):
+                del conversation_context, user_input
+                return ConversationDecision(ConversationMode.CHAT, reason="greeting")
+
+        decision = ModelConversationRouter(RouterModel()).route("", "hello")
+
+        self.assertEqual(decision.mode, ConversationMode.CHAT)
+        self.assertEqual(decision.task_goal, "")
+
     def test_model_router_asks_model_even_for_greeting(self):
         class RouterModel:
             def __init__(self):
@@ -123,14 +183,14 @@ class ConversationLoopTest(unittest.TestCase):
         self.assertEqual(decision.mode, ConversationMode.CHAT)
         self.assertEqual(decision.reason, "model decision")
 
-    def test_model_chat_decision_creates_chat_turn_without_agent_loop_run(self):
+    def test_chat_like_input_still_runs_agent_loop(self):
         router = StaticRouter(
             ConversationDecision(
                 mode=ConversationMode.CHAT,
                 reason="model classified chat",
             )
         )
-        responder = StaticResponder(chat_reply="你好，我可以陪你聊，也可以協助執行任務。")
+        responder = StaticResponder(task_reply="你好，我可以陪你聊，也可以協助執行任務。")
         with tempfile.TemporaryDirectory() as tmpdir:
             store = AutonomyStore(Path(tmpdir) / "autonomy.db")
             agent_loop = RecordingAgentLoop()
@@ -148,15 +208,16 @@ class ConversationLoopTest(unittest.TestCase):
             response = loop.handle_user_input("hello")
             conversation = store.inspect_conversation("session")
 
-        self.assertEqual(agent_loop.calls, [])
-        self.assertIsNone(response.run_result)
-        self.assertEqual(response.decision.mode, ConversationMode.CHAT)
-        self.assertEqual(response.decision.reason, "model classified chat")
-        self.assertEqual(response.reply, "你好，我可以陪你聊，也可以協助執行任務。")
-        self.assertEqual(responder.chat_calls[0]["user_input"], "hello")
+        self.assertEqual(agent_loop.calls[0]["goal"], "hello")
+        self.assertIsNotNone(response.run_result)
+        self.assertEqual(response.decision.mode, ConversationMode.TASK)
+        self.assertEqual(response.decision.reason, "agent turn")
+        self.assertIn("你好，我可以陪你聊，也可以協助執行任務。", response.reply)
+        self.assertIn("run_id: run-1", response.reply)
+        self.assertEqual(responder.task_calls[0]["user_input"], "hello")
         self.assertEqual(len(conversation["turns"]), 2)
-        self.assertEqual(conversation["turns"][0]["run_id"], None)
-        self.assertEqual(conversation["turns"][1]["run_id"], None)
+        self.assertEqual(conversation["turns"][0]["run_id"], "run-1")
+        self.assertEqual(conversation["turns"][1]["run_id"], "run-1")
 
     def test_first_input_creates_session_turns_and_linked_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -188,6 +249,54 @@ class ConversationLoopTest(unittest.TestCase):
             agent_loop.calls[0]["journal_metadata"]["conversation_turn_id"],
             conversation["turns"][0]["id"],
         )
+
+    def test_assistant_respond_observation_is_used_as_reply(self):
+        class AssistantRespondAgentLoop:
+            def __init__(self, store):
+                self.store = store
+
+            def run(self, goal, max_steps=12, interactive=True, interface="run", conversation_context="", journal_metadata=None):
+                del goal, max_steps, interactive, interface, conversation_context, journal_metadata
+                run_id = "run-1"
+                self.store.create_run(run_id, "hello")
+                self.store.record_event(
+                    run_id,
+                    1,
+                    "action_selected",
+                    {"tool": "assistant.respond", "purpose": "answer directly"},
+                )
+                self.store.record_event(
+                    run_id,
+                    1,
+                    "observation",
+                    {"succeeded": True, "output": "你好，我是 Autonomy。"},
+                )
+                result = RunResult(
+                    run_id=run_id,
+                    goal="hello",
+                    termination=TerminationReason.ACHIEVED,
+                    steps_executed=1,
+                    reason="assistant responded",
+                )
+                self.store.complete_run(result)
+                return result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = AutonomyStore(Path(tmpdir) / "autonomy.db")
+            loop = ConversationLoop(
+                workspace=Path(tmpdir),
+                db_path=Path(tmpdir) / "autonomy.db",
+                max_steps=4,
+                agent_loop_factory=lambda _workspace, _db_path: AssistantRespondAgentLoop(store),
+                router=TASK_ROUTER,
+                responder=StaticResponder(task_reply="summary should not be used"),
+                store=store,
+                session_id="session",
+            )
+
+            response = loop.handle_user_input("hello")
+
+        self.assertEqual(response.reply, "你好，我是 Autonomy。")
 
     def test_task_response_includes_new_action_recipe_candidates_only(self):
         class RecipeCandidateAgentLoop:
@@ -268,7 +377,7 @@ class ConversationLoopTest(unittest.TestCase):
             ["new-0", "new-1", "new-2"],
         )
 
-    def test_router_task_goal_can_rewrite_user_input_before_agent_loop(self):
+    def test_router_task_goal_does_not_rewrite_user_input_before_agent_loop(self):
         router = StaticRouter(
             ConversationDecision(
                     mode=ConversationMode.TASK,
@@ -294,7 +403,7 @@ class ConversationLoopTest(unittest.TestCase):
 
             response = loop.handle_user_input("分析目前專案架構")
 
-        self.assertEqual(agent_loop.calls[0]["goal"], "inspect repository architecture")
+        self.assertEqual(agent_loop.calls[0]["goal"], "分析目前專案架構")
         self.assertIn("我已完成專案架構分析。", response.reply)
         self.assertIn("run_id: run-1", response.reply)
         self.assertEqual(responder.task_calls[0]["user_input"], "分析目前專案架構")

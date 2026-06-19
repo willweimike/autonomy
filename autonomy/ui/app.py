@@ -78,8 +78,7 @@ class AutonomyTUI:
         self.skill_library_factory = skill_library_factory
         self.details_mode = "compact"
         self.turn_count = 0
-        self.chat_turn_count = 0
-        self.task_turn_count = 0
+        self.run_count = 0
         self.last_run_id: str | None = None
         self.last_run_termination: TerminationReason | None = None
         self._install_approval_panel()
@@ -121,8 +120,7 @@ class AutonomyTUI:
                 [
                     "AUTONOMY session summary",
                     f"turns:        {self.turn_count}",
-                    f"chat turns:   {self.chat_turn_count}",
-                    f"task runs:    {self.task_turn_count}",
+                    f"agent runs:   {self.run_count}",
                     f"details mode: {self.details_mode}",
                     f"last run:     {self._last_run_summary()}",
                     f"workspace:    {self.shell.workspace}",
@@ -138,7 +136,7 @@ class AutonomyTUI:
             "",
             "Session:",
             "  Runtime:  ConversationLoop -> AgentLoop -> ActionGateway",
-            f"  Steps:    max {self.shell.max_steps} per task run",
+            f"  Steps:    max {self.shell.max_steps} per agent run",
             f"  Detail:   {self.details_mode}",
             "",
             "Workspace:",
@@ -154,7 +152,7 @@ class AutonomyTUI:
             "  Skills guide candidate generation; ActionGateway governs execution",
             "",
             "Review queues:",
-            "  ProcedureSkill candidates and ActionRecipe candidates appear after task runs",
+            "  ProcedureSkill candidates and ActionRecipe candidates appear after agent runs",
             "",
             "Commands:",
             "  / or /? opens the command palette",
@@ -264,9 +262,8 @@ class AutonomyTUI:
 
     def _remember_response(self, response: ConversationResponse) -> None:
         if response.run_result is None:
-            self.chat_turn_count += 1
             return
-        self.task_turn_count += 1
+        self.run_count += 1
         self.last_run_id = response.run_result.run_id
         self.last_run_termination = response.run_result.termination
 
@@ -448,7 +445,7 @@ class AutonomyTUI:
         return f"tools {preview}"
 
     def _session_mix_compact(self) -> str:
-        return f"chat {self.chat_turn_count} task {self.task_turn_count}"
+        return f"runs {self.run_count}"
 
     def _last_run_status_compact(self) -> str:
         if self.last_run_id is None or self.last_run_termination is None:
@@ -500,7 +497,7 @@ class AutonomyTUI:
                 summary["blocked"] = int(summary["blocked"]) + len(payload)
             elif event_type == "action_selected" and isinstance(payload, dict):
                 summary["tool"] = str(payload.get("tool", ""))
-                summary["risk"] = str(payload.get("risk_level", ""))
+                summary["risk"] = str(payload.get("effective_risk_level", payload.get("risk_level", "")))
             elif event_type == "approval_decision" and isinstance(payload, dict):
                 summary["approval"] = "allowed" if payload.get("allowed") else "denied"
             elif event_type == "observation" and isinstance(payload, dict):
@@ -551,7 +548,7 @@ class AutonomyTUI:
             row = by_step[step]
             if event_type == "action_selected" and isinstance(payload, dict):
                 tool = str(payload.get("tool", ""))
-                risk = str(payload.get("risk_level", ""))
+                risk = str(payload.get("effective_risk_level", payload.get("risk_level", "")))
                 purpose = str(payload.get("purpose", ""))
                 risk_label = f" [{risk}]" if risk else ""
                 purpose_label = f" · {purpose}" if purpose else ""
@@ -636,7 +633,7 @@ class AutonomyTUI:
             return f"execution boundary blocked: {len(payload)} candidate(s)"
         if event_type == "action_selected" and isinstance(payload, dict):
             tool = payload.get("tool", "")
-            risk = payload.get("risk_level", "")
+            risk = payload.get("effective_risk_level", payload.get("risk_level", ""))
             purpose = payload.get("purpose", "")
             suffix = f" · {purpose}" if purpose else ""
             return f"action selected: {tool} [{risk}]{suffix}"
@@ -804,11 +801,14 @@ class AutonomyTUI:
             return ""
 
     def _approval_prompt(self, message: str) -> bool:
+        display_message = message.strip()
+        if display_message.endswith(" [y/N]"):
+            display_message = display_message[: -len(" [y/N]")].rstrip()
         self._write(
             self._box(
                 "Approval Required",
                 [
-                    message.strip(),
+                    display_message,
                     "",
                     "[a] approve  [d] deny  [enter] deny",
                 ],

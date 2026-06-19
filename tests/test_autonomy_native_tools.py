@@ -182,6 +182,22 @@ class AutonomyNativeToolsTest(unittest.TestCase):
         self.assertIn("Use offset=5", window.output)
         self.assertIn("offset must be at least 1", invalid)
 
+    def test_assistant_respond_tool_returns_direct_reply(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(tmpdir)
+            observation = registry.execute(
+                Action(
+                    "assistant.respond",
+                    {"response": "你好，我是 Autonomy。"},
+                    "answer user",
+                    "verify",
+                )
+            )
+
+        self.assertTrue(observation.succeeded)
+        self.assertEqual(observation.output, "你好，我是 Autonomy。")
+        self.assertIn("assistant_response", observation.evidence)
+
     def test_filesystem_read_many_batches_bounded_text_reads(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -926,6 +942,7 @@ def run_task():
             sorted(registry.names),
             sorted(
                 [
+                    "assistant.respond",
                     "filesystem.diff",
                     "filesystem.imports",
                     "filesystem.list",

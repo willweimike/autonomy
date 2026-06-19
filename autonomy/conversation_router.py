@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from .model import CandidateModel
-from .models import ConversationDecision, ConversationMode
-from .providers import ModelClientError, ProviderConfigurationError
+from .models import ConversationDecision
+from .providers import ProviderConfigurationError
 
 
 class ConversationRouter(Protocol):
@@ -13,21 +13,14 @@ class ConversationRouter(Protocol):
 
 
 class ModelConversationRouter:
-    """Classify conversation turns before deciding whether to start a task run."""
+    """Legacy model-backed conversation turn classifier."""
 
     def __init__(self, model: CandidateModel):
         self.model = model
 
     def route(self, conversation_context: str, user_input: str) -> ConversationDecision:
         text = user_input.strip()
-        try:
-            return self.model.classify_conversation_turn(conversation_context, text)
-        except (ModelClientError, AttributeError, KeyError, TypeError, ValueError) as exc:
-            return ConversationDecision(
-                mode=ConversationMode.TASK,
-                task_goal=text,
-                reason=f"conversation router failed; falling back to task mode: {exc}",
-            )
+        return self.model.classify_conversation_turn(conversation_context, text)
 
 
 class MissingModelConversationRouter:

@@ -140,6 +140,68 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(event_types.count("observation"), 2)
         self.assertEqual(event_types.count("outcome_evaluated"), 2)
 
+    def test_agent_loop_does_not_inject_browser_navigate_for_url_task(self):
+        def browser_execute(arguments):
+            self.executions.append(("browser.navigate", arguments))
+            return Observation("", True, output="title: Wikipedia", evidence=("browser_navigate:https://zh.wikipedia.org/",))
+
+        def shell_execute(arguments):
+            self.executions.append(("shell.execute", arguments))
+            return Observation("", True, output="curl", evidence=("exit_code:0",))
+
+        self.registry.register("browser.navigate", browser_execute)
+        self.registry.register("shell.execute", shell_execute, default_risk=RiskLevel.LOW)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="shell.execute",
+                        arguments={"command": "curl -sL https://zh.wikipedia.org/"},
+                        purpose="fetch with curl",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model, approval=ApprovalPolicy(prompt=lambda _message: True)).run(
+            "navigate https://zh.wikipedia.org/, and tell me what page is this",
+            max_steps=1,
+            interactive=True,
+        )
+
+        self.assertEqual(result.steps_executed, 1)
+        self.assertEqual(self.executions[0][0], "shell.execute")
+        ranked = next(
+            event["payload"]
+            for event in self.store.inspect_run(result.run_id)["events"]
+            if event["event_type"] == "candidates_ranked"
+        )
+        self.assertEqual(ranked[0]["actions"][0]["tool"], "shell.execute")
+
+    def test_agent_loop_accepts_assistant_respond_as_final_answer(self):
+        def respond(arguments):
+            self.executions.append(arguments)
+            return Observation("", True, output=arguments["response"], evidence=("assistant_response",))
+
+        self.registry.register("assistant.respond", respond)
+        model = SequenceModel(
+            [
+                [
+                    candidate(
+                        tool="assistant.respond",
+                        arguments={"response": "你好，我是 Autonomy。"},
+                        purpose="answer directly",
+                    )
+                ]
+            ]
+        )
+
+        result = self.agent_loop(model).run("hello", interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        self.assertEqual(result.steps_executed, 1)
+        self.assertEqual(self.executions, [{"response": "你好，我是 Autonomy。"}])
+
     def test_agent_loop_journals_non_secret_model_provider_context(self):
         model = SequenceModel([[candidate(goal_achieving=True)]])
         model.journal_context = {

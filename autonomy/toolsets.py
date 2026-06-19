@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 
-DEFAULT_ENABLED_TOOLSETS = ("file", "terminal", "search", "skills")
+DEFAULT_ENABLED_TOOLSETS = ("assistant", "browser", "file", "terminal", "search", "skills")
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,12 @@ class ToolsetDefinition:
 
 
 TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
+    ToolsetDefinition(
+        "assistant",
+        "Direct assistant response tools.",
+        "implemented",
+        ("assistant.respond",),
+    ),
     ToolsetDefinition("search", "Search tools.", "implemented", ("search.text",)),
     ToolsetDefinition("vision", "Image and visual understanding tools."),
     ToolsetDefinition("image_gen", "Image generation tools."),

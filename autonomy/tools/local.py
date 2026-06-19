@@ -2040,6 +2040,14 @@ def build_local_tool_registry(
             exit_code=completed.returncode,
         )
 
+    def assistant_respond(arguments: dict) -> Observation:
+        return Observation(
+            "",
+            True,
+            output=str(arguments["response"]).strip(),
+            evidence=("assistant_response",),
+        )
+
     def validate_read(arguments: dict) -> None:
         path = _resolve_inside(root, str(arguments["path"]))
         _validate_readable_text_path(path)
@@ -2205,6 +2213,10 @@ def build_local_tool_registry(
         if timeout < 1:
             raise ValueError("timeout must be at least 1")
         _coerce_shell_output_limit(arguments)
+
+    def validate_assistant_respond(arguments: dict) -> None:
+        if not str(arguments["response"]).strip():
+            raise ValueError("response must not be empty")
 
     registry.register(
         "filesystem.read",
@@ -2491,6 +2503,15 @@ def build_local_tool_registry(
             "limit": "integer max results, default 100, max 500 (optional)",
             "offset": "integer result offset, 0-indexed (optional)",
         },
+        default_risk=RiskLevel.LOW,
+    )
+    registry.register(
+        "assistant.respond",
+        assistant_respond,
+        validate_assistant_respond,
+        description="Return a direct assistant response without external tool use.",
+        toolset="assistant",
+        argument_contract={"response": "string response to show the user"},
         default_risk=RiskLevel.LOW,
     )
     registry.register(
