@@ -5,5 +5,7 @@ __pycache__/
 build/
 dist/
 adapter/
-hermes-agent/
+reference_hermes-agent/
 *.egg-info
+.Trash
+Icon

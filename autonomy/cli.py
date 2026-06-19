@@ -4,6 +4,7 @@ import argparse
 import getpass
 import json
 import os
+import re
 import shlex
 import sqlite3
 import sys
@@ -50,6 +51,9 @@ from .toolsets import (
     toolset_catalog_status,
 )
 from .outcome import ModelAssistedOutcomeEvaluator
+
+
+_BRACKETED_PASTE_PATTERN = re.compile(r"\x1b\[\s*200~|\x1b\[\s*201~")
 
 
 def default_db_path() -> Path:
@@ -498,7 +502,7 @@ class SessionShell:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autonomy",
-        description="Start an interactive Autonomy session when no subcommand is provided.",
+        description="Start the Autonomy TUI when no subcommand is provided.",
     )
     parser.add_argument("--db", type=Path, default=None)
     subparsers = parser.add_subparsers(dest="command", required=False)
@@ -508,10 +512,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--workspace", type=Path, default=Path.cwd())
     run.add_argument("--max-steps", type=int, default=12)
     run.add_argument("--non-interactive", action="store_true")
-
-    chat = subparsers.add_parser("chat")
-    chat.add_argument("--workspace", type=Path, default=Path.cwd())
-    chat.add_argument("--max-steps", type=int, default=12)
 
     tui = subparsers.add_parser("tui")
     tui.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -568,19 +568,51 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _prompt_with_default(label: str, default: str) -> str:
-    value = input(f"{label} [{default}]: ").strip()
+    value = _sanitize_pasted_input(input(f"{label} [{default}]: ")).strip()
     return value or default
 
 
-def _choose_provider(provider: str | None) -> str:
+def _sanitize_pasted_input(value: str) -> str:
+    return _BRACKETED_PASTE_PATTERN.sub("", value) if value else value
+
+
+def _prompt_secret(label: str) -> str:
+    return _sanitize_pasted_input(getpass.getpass(f"{label}: ")).strip()
+
+
+def _print_model_setup_header(existing: ModelConfiguration | None) -> None:
+    print()
+    print("Model Provider Setup")
+    if existing:
+        print(f"Current: {existing.provider}/{existing.model}")
+        print(f"Endpoint: {existing.base_url}")
+    else:
+        print("Current: not configured")
+    print()
+
+
+def _choose_from_menu(label: str, choices: list[str], default: int = 0) -> str:
+    for index, choice in enumerate(choices, start=1):
+        suffix = " (default)" if index - 1 == default else ""
+        print(f"{index}. {choice}{suffix}")
+    selected = _sanitize_pasted_input(
+        input(f"{label} [1-{len(choices)} or name, Enter={default + 1}]: ")
+    ).strip()
+    if not selected:
+        return choices[default]
+    if selected.isdigit() and 1 <= int(selected) <= len(choices):
+        return choices[int(selected) - 1]
+    if selected in choices:
+        return selected
+    raise ProviderConfigurationError("provider must be one of: " + ", ".join(choices))
+
+
+def _choose_provider(provider: str | None, existing: ModelConfiguration | None = None) -> str:
     if provider:
         return provider
-    selected = input("Provider [ollama/openai-api]: ").strip()
-    if selected not in PROVIDER_SPECS:
-        raise ProviderConfigurationError(
-            "provider must be one of: " + ", ".join(sorted(PROVIDER_SPECS))
-        )
-    return selected
+    choices = list(PROVIDER_SPECS)
+    default = choices.index(existing.provider) if existing and existing.provider in choices else 0
+    return _choose_from_menu("Provider", choices, default)
 
 
 def _choose_model(models: list[str], default: str = "") -> str:
@@ -598,47 +630,58 @@ def _choose_model(models: list[str], default: str = "") -> str:
     return selected
 
 
+def _choose_unlisted_model(default: str) -> str:
+    model = _prompt_with_default("Model name", default).strip()
+    if not model:
+        raise ProviderConfigurationError("configured model must not be empty")
+    return model
+
+
 def setup_model(provider_argument: str | None, config_store: ModelConfigStore) -> int:
-    provider_id = _choose_provider(provider_argument)
-    spec = PROVIDER_SPECS[provider_id]
     try:
         existing = config_store.load()
     except ProviderConfigurationError:
         existing = None
+    _print_model_setup_header(existing)
+    provider_id = _choose_provider(provider_argument, existing)
+    spec = PROVIDER_SPECS[provider_id]
 
     default_base_url = (
         existing.base_url if existing and existing.provider == provider_id else spec.default_base_url
     )
     base_url = _prompt_with_default("Base URL", default_base_url).rstrip("/")
-    default_model = existing.model if existing and existing.provider == provider_id else ""
+    default_model = existing.model if existing and existing.provider == provider_id else spec.default_model
     api_key: str | None = None
     if spec.requires_api_key:
-        stored_key = config_store.existing_openai_api_key()
-        prompt = "OpenAI API key"
+        stored_key = config_store.existing_api_key(provider_id)
+        prompt = spec.api_key_label
         if stored_key:
             prompt += " (leave blank to keep existing)"
-        entered_key = getpass.getpass(f"{prompt}: ").strip()
+        entered_key = _prompt_secret(prompt)
         api_key = entered_key or stored_key
         if not api_key:
-            raise ProviderConfigurationError("OpenAI API key must not be empty")
+            raise ProviderConfigurationError(f"{spec.api_key_label} must not be empty")
 
-    probe_configuration = ModelConfiguration(
-        provider=provider_id,
-        model=default_model or "setup-probe",
-        base_url=base_url,
-        timeout=spec.default_timeout,
-    )
-    probe = create_provider(probe_configuration, config_store, openai_api_key=api_key)
-    model_name = _choose_model(probe.list_models(), default_model)
+    if spec.supports_model_listing:
+        probe_configuration = ModelConfiguration(
+            provider=provider_id,
+            model=default_model or "setup-probe",
+            base_url=base_url,
+            timeout=spec.default_timeout,
+        )
+        probe = create_provider(probe_configuration, config_store, api_key=api_key)
+        model_name = _choose_model(probe.list_models(), default_model)
+    else:
+        model_name = _choose_unlisted_model(default_model)
     configuration = ModelConfiguration(
         provider=provider_id,
         model=model_name,
         base_url=base_url,
         timeout=spec.default_timeout,
     )
-    provider = create_provider(configuration, config_store, openai_api_key=api_key)
+    provider = create_provider(configuration, config_store, api_key=api_key)
     provider.validate()
-    config_store.save(configuration, openai_api_key=api_key if spec.requires_api_key else None)
+    config_store.save(configuration, api_key=api_key if spec.requires_api_key else None)
     print(
         json.dumps(
             {
@@ -732,8 +775,9 @@ def doctor(
                 "endpoint": configuration.base_url,
             }
         )
-        if configuration.provider == "openai-api":
-            config_store.load_openai_api_key()
+        spec = PROVIDER_SPECS[configuration.provider]
+        if spec.requires_api_key:
+            config_store.load_api_key(configuration.provider)
             checks["credentials_configured"] = True
             checks["env_permissions_secure"] = config_store.env_permissions_secure()
             if checks["env_permissions_secure"] is not True:
@@ -743,11 +787,16 @@ def doctor(
         else:
             checks["credentials_configured"] = True
         provider = create_provider(configuration, config_store)
-        models = provider.list_models()
-        checks["model_endpoint_reachable"] = True
-        checks["model_available"] = configuration.model in models
-        if not checks["model_available"]:
-            checks["model_error"] = f"configured model is unavailable: {configuration.model}"
+        if spec.supports_model_listing:
+            models = provider.list_models()
+            checks["model_endpoint_reachable"] = True
+            checks["model_available"] = configuration.model in models
+            if not checks["model_available"]:
+                checks["model_error"] = f"configured model is unavailable: {configuration.model}"
+        else:
+            provider.validate()
+            checks["model_endpoint_reachable"] = True
+            checks["model_available"] = True
     except (ProviderConfigurationError, ModelClientError, OSError) as exc:
         checks["model_error"] = str(exc)
 
@@ -765,7 +814,7 @@ def doctor(
             "model_available",
         )
     )
-    if checks["provider"] == "openai-api":
+    if checks["provider"] in PROVIDER_SPECS and PROVIDER_SPECS[checks["provider"]].requires_api_key:
         required = required and checks["env_permissions_secure"] is True
     return 0 if required else 1
 
@@ -790,33 +839,14 @@ def main(argv: list[str] | None = None) -> int:
     tool_config_dir = _toolset_config_dir_for(workspace)
     config_store = ModelConfigStore(config_dir)
     toolset_store = ToolsetConfigStore(tool_config_dir)
-    if args.command is None:
-        return SessionShell(
+    if args.command is None or args.command == "tui":
+        return _run_tui_session(
             workspace=workspace,
             db_path=db_path,
-            max_steps=12,
-            config_dir=config_dir,
-            tool_config_dir=tool_config_dir,
-        ).run()
-    if args.command == "chat":
-        return SessionShell(
-            workspace=workspace,
-            db_path=db_path,
-            max_steps=args.max_steps,
-            config_dir=config_dir,
-            tool_config_dir=tool_config_dir,
-        ).run()
-    if args.command == "tui":
-        from .ui import AutonomyTUI
-
-        shell = SessionShell(
-            workspace=workspace,
-            db_path=db_path,
-            max_steps=args.max_steps,
+            max_steps=getattr(args, "max_steps", 12),
             config_dir=config_dir,
             tool_config_dir=tool_config_dir,
         )
-        return AutonomyTUI(shell).run()
     if args.command == "model":
         try:
             return setup_model(args.provider, config_store)
@@ -928,6 +958,26 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _workspace_for_args(args) -> Path:
-    if args.command in {"chat", "run", "skills", "tui"}:
+    if args.command in {"run", "skills", "tui"}:
         return args.workspace.expanduser().resolve()
     return Path.cwd().resolve()
+
+
+def _run_tui_session(
+    *,
+    workspace: Path,
+    db_path: Path,
+    max_steps: int,
+    config_dir: Path,
+    tool_config_dir: Path,
+) -> int:
+    from .ui import AutonomyTUI
+
+    shell = SessionShell(
+        workspace=workspace,
+        db_path=db_path,
+        max_steps=max_steps,
+        config_dir=config_dir,
+        tool_config_dir=tool_config_dir,
+    )
+    return AutonomyTUI(shell).run()

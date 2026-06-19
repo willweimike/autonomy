@@ -29,13 +29,17 @@ class FakeProvider:
     def __init__(self, models=None, error=None):
         self.models = models or ["qwen2.5vl:7b"]
         self.error = error
+        self.list_model_calls = 0
+        self.validate_calls = 0
 
     def list_models(self):
+        self.list_model_calls += 1
         if self.error:
             raise self.error
         return self.models
 
     def validate(self):
+        self.validate_calls += 1
         if self.error:
             raise self.error
 
@@ -90,6 +94,17 @@ class TaskResponder:
     def summarize_task_result(self, conversation_context, user_input, result):
         del conversation_context, user_input
         return f"handled {result.goal}"
+
+
+class ProjectToolConfigurationTest(unittest.TestCase):
+    def test_project_default_tools_do_not_enable_web_search(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        configuration = ToolsetConfigStore(repo_root / ".autonomy").load()
+
+        self.assertNotIn("web", configuration.enabled_toolsets)
+        self.assertIn("file", configuration.enabled_toolsets)
+        self.assertIn("search", configuration.enabled_toolsets)
+        self.assertIn("terminal", configuration.enabled_toolsets)
 
 
 class AutonomyNativeCliTest(unittest.TestCase):
@@ -153,23 +168,27 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertIn("autonomy model setup", error.getvalue())
         self.assertNotIn("Traceback", error.getvalue())
 
-    def test_parser_allows_no_subcommand_for_chat(self):
+    def test_parser_allows_no_subcommand_for_tui_default(self):
         args = build_parser().parse_args([])
 
         self.assertIsNone(args.command)
 
-    def test_chat_subcommand_enters_session_shell(self):
+    def test_chat_subcommand_is_removed(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["chat"])
+
+    def test_tui_subcommand_enters_tui(self):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
-            patch("autonomy.cli.SessionShell.run", return_value=0) as shell_run,
+            patch("autonomy.ui.AutonomyTUI.run", return_value=0) as tui_run,
         ):
             result = main(
                 [
                     "--db",
-                    str(Path(tmpdir) / "chat.db"),
-                    "chat",
+                    str(Path(tmpdir) / "tui.db"),
+                    "tui",
                     "--workspace",
                     tmpdir,
                     "--max-steps",
@@ -178,19 +197,19 @@ class AutonomyNativeCliTest(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        shell_run.assert_called_once()
+        tui_run.assert_called_once()
 
-    def test_no_subcommand_enters_session_shell(self):
+    def test_no_subcommand_enters_tui(self):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
             patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
-            patch("autonomy.cli.SessionShell.run", return_value=0) as shell_run,
+            patch("autonomy.ui.AutonomyTUI.run", return_value=0) as tui_run,
         ):
-            result = main(["--db", str(Path(tmpdir) / "chat.db")])
+            result = main(["--db", str(Path(tmpdir) / "tui.db")])
 
         self.assertEqual(result, 0)
-        shell_run.assert_called_once()
+        tui_run.assert_called_once()
 
     def test_session_shell_routes_natural_language_through_conversation_loop(self):
         result_payload = RunResult(
@@ -261,7 +280,7 @@ class AutonomyNativeCliTest(unittest.TestCase):
                     "goal": "inspect repository",
                     "max_steps": 3,
                     "interactive": True,
-                    "interface": "chat",
+                    "interface": "tui",
                     "conversation_context": "",
                     "journal_metadata": {
                         "conversation_session_id": shell.conversation.session_id,
@@ -705,6 +724,25 @@ requires_tools: [filesystem.read]
         self.assertEqual(saved.model, "qwen2.5vl:7b")
         self.assertNotIn("api_key", output.getvalue())
 
+    def test_model_setup_provider_menu_accepts_numbered_choice(self):
+        fake = FakeProvider(models=["gpt-test"])
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.create_provider", return_value=fake),
+            patch("builtins.input", side_effect=["2", "", ""]),
+            patch("autonomy.cli.getpass.getpass", return_value="secret-value"),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = main(["model", "setup"])
+            saved = ModelConfigStore(Path(tmpdir) / "config").load()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(saved.provider, "openai-api")
+        self.assertIn("Model Provider Setup", output.getvalue())
+        self.assertIn("1. ollama", output.getvalue())
+        self.assertIn("2. openai-api", output.getvalue())
+
     def test_model_setup_openai_saves_secret_with_secure_permissions(self):
         fake = FakeProvider(models=["gpt-test"])
         with (
@@ -722,6 +760,73 @@ requires_tools: [filesystem.read]
             self.assertEqual(store.load_openai_api_key(), "secret-value")
             self.assertTrue(store.env_permissions_secure())
             self.assertNotIn("secret-value", output.getvalue())
+
+    def test_model_setup_strips_bracketed_paste_markers_from_secret(self):
+        fake = FakeProvider(models=["gpt-test"])
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.create_provider", return_value=fake),
+            patch("builtins.input", side_effect=["", ""]),
+            patch("autonomy.cli.getpass.getpass", return_value="\x1b[200~secret-value\x1b[201~"),
+            redirect_stdout(io.StringIO()),
+        ):
+            result = main(["model", "setup", "openai-api"])
+            key = ModelConfigStore(Path(tmpdir) / "config").load_openai_api_key()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(key, "secret-value")
+
+    def test_model_setup_nvidia_saves_secret_and_uses_default_model(self):
+        fake = FakeProvider()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.create_provider", return_value=fake),
+            patch("builtins.input", side_effect=["", ""]),
+            patch("autonomy.cli.getpass.getpass", return_value="nvidia-secret"),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = main(["model", "setup", "nvidia"])
+            store = ModelConfigStore(Path(tmpdir) / "config")
+            saved = store.load()
+            saved_key = store.load_api_key("nvidia")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(saved.provider, "nvidia")
+        self.assertEqual(saved.model, "moonshotai/kimi-k2.6")
+        self.assertEqual(saved.base_url, "https://integrate.api.nvidia.com/v1")
+        self.assertEqual(saved_key, "nvidia-secret")
+        self.assertEqual(fake.list_model_calls, 0)
+        self.assertEqual(fake.validate_calls, 1)
+        self.assertNotIn("nvidia-secret", output.getvalue())
+
+    def test_doctor_checks_nvidia_without_model_listing(self):
+        fake = FakeProvider()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("autonomy.cli.default_model_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.default_toolset_config_dir", return_value=Path(tmpdir) / "config"),
+            patch("autonomy.cli.create_provider", return_value=fake),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            ModelConfigStore(Path(tmpdir) / "config").save(
+                ModelConfiguration(
+                    "nvidia",
+                    "moonshotai/kimi-k2.6",
+                    "https://integrate.api.nvidia.com/v1",
+                    120,
+                ),
+                api_key="nvidia-secret",
+            )
+            result = main(["--db", str(Path(tmpdir) / "doctor.db"), "doctor"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(fake.list_model_calls, 0)
+        self.assertEqual(fake.validate_calls, 1)
+        self.assertIn('"provider": "nvidia"', output.getvalue())
+        self.assertIn('"model_available": true', output.getvalue())
+        self.assertNotIn("nvidia-secret", output.getvalue())
 
     def test_failed_model_setup_does_not_replace_existing_configuration(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -793,10 +898,9 @@ requires_tools: [filesystem.read]
             status = json.loads(output.getvalue())
             self.assertEqual(result, 0)
             self.assertIn("browser", {row["name"] for row in status})
-            self.assertIn("web", {row["name"] for row in status})
+            self.assertNotIn("web", {row["name"] for row in status})
             file_row = next(row for row in status if row["name"] == "file")
             terminal_row = next(row for row in status if row["name"] == "terminal")
-            web_row = next(row for row in status if row["name"] == "web")
             browser_row = next(row for row in status if row["name"] == "browser")
             self.assertTrue(file_row["enabled"])
             self.assertTrue(file_row["implemented"])
@@ -809,8 +913,6 @@ requires_tools: [filesystem.read]
             self.assertTrue(terminal_row["enabled"])
             self.assertIn("shell.execute", terminal_row["available_tools"])
             self.assertIn("process.start", terminal_row["available_tools"])
-            self.assertTrue(web_row["implemented"])
-            self.assertFalse(web_row["enabled"])
             self.assertTrue(browser_row["implemented"])
             self.assertFalse(browser_row["enabled"])
             self.assertEqual(browser_row["available_tools"], [])
@@ -828,20 +930,18 @@ requires_tools: [filesystem.read]
             saved = ToolsetConfigStore(Path(tmpdir) / "config").load()
             self.assertIn("browser", saved.enabled_toolsets)
 
-            with redirect_stdout(io.StringIO()):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as error:
                 result = main(["tools", "enable", "web"])
-            self.assertEqual(result, 0)
+            self.assertEqual(result, 2)
+            self.assertIn("unknown toolset: web", error.getvalue())
             saved = ToolsetConfigStore(Path(tmpdir) / "config").load()
-            self.assertIn("web", saved.enabled_toolsets)
+            self.assertNotIn("web", saved.enabled_toolsets)
 
             with redirect_stdout(io.StringIO()) as output:
                 result = main(["tools", "status"])
             self.assertEqual(result, 0)
             status = json.loads(output.getvalue())
-            web_row = next(row for row in status if row["name"] == "web")
             browser_row = next(row for row in status if row["name"] == "browser")
-            self.assertTrue(web_row["enabled"])
-            self.assertEqual(web_row["available_tools"], ["web.search"])
             self.assertTrue(browser_row["enabled"])
             self.assertTrue(browser_row["implemented"])
             self.assertEqual(browser_row["available_tools"], [])
@@ -952,7 +1052,7 @@ requires_tools: [filesystem.read]
             self.assertEqual(result, 0)
             self.assertEqual(json.loads(output.getvalue())["status"], "rejected")
 
-    def test_skills_cli_installs_bundled_web_browser_skills(self):
+    def test_skills_cli_installs_bundled_browser_skills(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()
@@ -967,7 +1067,6 @@ requires_tools: [filesystem.read]
                         "--workspace",
                         str(workspace),
                         "install-bundled",
-                        "web-research",
                         "website-inspection",
                     ]
                 )
@@ -975,14 +1074,14 @@ requires_tools: [filesystem.read]
             self.assertEqual(result, 0)
             self.assertEqual(
                 [summary["name"] for summary in installed],
-                ["web-research", "website-inspection"],
+                ["website-inspection"],
             )
             self.assertTrue(
                 (
                     workspace
                     / ".autonomy"
                     / "skills"
-                    / "web-research"
+                    / "website-inspection"
                     / "SKILL.md"
                 ).is_file()
             )

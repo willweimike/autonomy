@@ -4,7 +4,7 @@ description: Diagnose REST and GraphQL integrations layer by layer.
 version: 1.0.0
 tags: [api, rest, graphql, debugging, integration]
 platforms: [macos, linux, windows]
-requires_tools: [web.search, shell.execute]
+requires_tools: [shell.execute]
 ---
 
 # API Debugging
@@ -16,13 +16,12 @@ Workflow:
 - Confirm connectivity and the exact URL or endpoint under investigation.
 - Separate connection timeout, response timeout, TLS, authentication, request
   format, response parsing, and domain semantics.
-- Use `web.search` to find public documentation, known errors, or API reference
-  pages when the exact documentation URL is unknown.
+- Use user-provided documentation URLs, repository docs, or known API
+  references; do not assume web search is available.
 - Use bounded `shell.execute` curl commands for concrete request/response
   evidence.
 - For GraphQL, inspect response `errors` even when HTTP status is 200.
-- Compare API behavior against relevant docs found through search when
-  available.
+- Compare API behavior against relevant docs when available.
 
 Tool use rules:
 - Do not expose or invent secrets in requests.

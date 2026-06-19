@@ -157,13 +157,13 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(started["interface"], "run")
         self.assertNotIn("api_key", started)
 
-    def test_agent_loop_journals_chat_interface(self):
+    def test_agent_loop_journals_tui_interface(self):
         model = SequenceModel([[candidate(goal_achieving=True)]])
 
-        result = self.agent_loop(model).run("collect evidence", interactive=False, interface="chat")
+        result = self.agent_loop(model).run("collect evidence", interactive=False, interface="tui")
 
         started = self.store.inspect_run(result.run_id)["events"][0]["payload"]
-        self.assertEqual(started["interface"], "chat")
+        self.assertEqual(started["interface"], "tui")
 
     def test_agent_loop_loads_project_context_into_state_and_journal(self):
         class ContextCapturingModel(SequenceModel):
@@ -228,7 +228,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         result = self.agent_loop(model).run(
             "continue",
             interactive=False,
-            interface="chat",
+            interface="tui",
             conversation_context="previous run summary",
             journal_metadata={
                 "conversation_session_id": "session",
@@ -341,65 +341,37 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertIn("path escapes workspace", blocked["payload"][0]["reason"])
         self.assertEqual(selected["payload"]["arguments"], {"path": "valid"})
 
-    def test_agent_loop_executes_web_intent_through_gateway(self):
-        class Headers:
-            def get_content_charset(self):
-                return "utf-8"
-
-            def get(self, name, default=""):
-                return "text/html; charset=utf-8" if name == "content-type" else default
-
-        class Response:
-            status = 200
-            headers = Headers()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, traceback):
-                del exc_type, exc, traceback
-
-            def read(self, size=-1):
-                body = (
-                    "<html><body>"
-                    "<a class='result__a' href='https://example.test/'>Example Domain</a>"
-                    "<a class='result__snippet'>Example Domain information</a>"
-                    "</body></html>"
-                ).encode("utf-8")
-                return body if size < 0 else body[:size]
-
-            def geturl(self):
-                return "https://duckduckgo.com/html/?q=example"
-
+    def test_agent_loop_executes_search_intent_through_gateway(self):
+        Path(self.tmpdir.name, "notes.txt").write_text("Example Domain information\n", encoding="utf-8")
         self.registry = build_local_tool_registry(
             self.tmpdir.name,
-            ToolsetConfiguration(enabled_toolsets=("web",)),
+            ToolsetConfiguration(enabled_toolsets=("search",)),
         )
         model = SequenceModel(
             [
                 [
                     candidate(
-                        tool="web.search",
+                        tool="search.text",
                         arguments={
                             "query": "Example Domain",
+                            "path": ".",
                             "_goal_achieving": True,
                         },
-                        purpose="search target page",
+                        purpose="search workspace notes",
                     )
                 ]
             ]
         )
 
-        with patch("urllib.request.urlopen", return_value=Response()):
-            result = self.agent_loop(model).run("inspect website", interactive=False)
+        result = self.agent_loop(model).run("inspect notes", interactive=False)
 
         self.assertEqual(result.termination, TerminationReason.ACHIEVED)
         journal = self.store.inspect_run(result.run_id)
         selected = next(
             event for event in journal["events"] if event["event_type"] == "action_selected"
         )
-        self.assertEqual(selected["payload"]["tool"], "web.search")
-        self.assertEqual(selected["payload"]["tool_spec"]["toolset"], "web")
+        self.assertEqual(selected["payload"]["tool"], "search.text")
+        self.assertEqual(selected["payload"]["tool_spec"]["toolset"], "search")
 
     def test_non_interactive_mode_denies_action_that_requires_approval(self):
         self.registry.register(

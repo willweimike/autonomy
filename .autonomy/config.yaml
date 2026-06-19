@@ -1,6 +1,6 @@
 version: 1
 model:
-  provider: ollama
-  model: qwen2.5vl:7b
-  base_url: http://127.0.0.1:11434/v1
-  timeout: 180
+  provider: nvidia
+  model: moonshotai/kimi-k2.6
+  base_url: https://integrate.api.nvidia.com/v1
+  timeout: 120

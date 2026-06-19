@@ -172,11 +172,10 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         )
         self.assertEqual(self.library.list_candidates(), [])
 
-    def test_install_bundled_web_browser_skills_and_filter_by_available_tools(self):
+    def test_install_bundled_browser_skills_and_filter_by_available_tools(self):
         installed = self.library.install_bundled(
             [
                 "code-editing",
-                "web-research",
                 "browser-navigation",
                 "process-management",
                 "systematic-debugging",
@@ -195,7 +194,6 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             [summary.name for summary in installed],
             [
                 "code-editing",
-                "web-research",
                 "browser-navigation",
                 "process-management",
                 "systematic-debugging",
@@ -209,7 +207,6 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "procedure-skill-authoring",
             ],
         )
-        web_only = self.library.index({"web.search"})
         code_tools = {
             "filesystem.read",
             "filesystem.list",
@@ -267,7 +264,6 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "shell.execute",
         }
         api_tools = {
-            "web.search",
             "shell.execute",
         }
         documentation_tools = {
@@ -327,18 +323,18 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         self.assertEqual(
             [summary.name for summary in code_only],
             [
+                "api-debugging",
                 "code-editing",
                 "codebase-documentation",
                 "systematic-debugging",
                 "test-driven-development",
             ],
         )
-        self.assertEqual([summary.name for summary in web_only], ["web-research"])
         self.assertEqual([summary.name for summary in browser_only], ["browser-navigation"])
-        self.assertEqual([summary.name for summary in process_only], ["process-management"])
-        self.assertEqual([summary.name for summary in debugging_only], ["systematic-debugging"])
+        self.assertEqual([summary.name for summary in process_only], ["api-debugging", "process-management"])
+        self.assertEqual([summary.name for summary in debugging_only], ["api-debugging", "systematic-debugging"])
         self.assertIn("test-driven-development", [summary.name for summary in editing_only])
-        self.assertEqual([summary.name for summary in api_only], ["api-debugging", "web-research"])
+        self.assertEqual([summary.name for summary in api_only], ["api-debugging"])
         self.assertIn(
             "codebase-documentation",
             [summary.name for summary in documentation_only],
@@ -353,7 +349,7 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             ["procedure-skill-authoring"],
         )
         with self.assertRaises(FileExistsError):
-            self.library.install_bundled(["web-research"])
+            self.library.install_bundled(["code-editing"])
 
     def test_install_bundled_all_includes_software_engineering_skill_pack(self):
         installed = self.library.install_bundled()
@@ -425,7 +421,6 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
             "filesystem.imports",
             "filesystem.symbol_search",
             "filesystem.syntax_check",
-            "web.search",
             "shell.execute",
             "process.start",
             "process.poll",

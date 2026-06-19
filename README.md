@@ -38,19 +38,18 @@ a runtime dependency.
 ## Requirements
 
 - Python 3.13+
-- Ollama or an OpenAI API key for live model-generated candidates
+- Ollama, an OpenAI API key, or an NVIDIA API key for live model-generated candidates
 
 ## Commands
 
 ```bash
 python3.13 -m autonomy
-python3.13 -m autonomy chat
 python3.13 -m autonomy tui
-python3.13 -m autonomy chat --workspace . --max-steps 5
 python3.13 -m autonomy tui --workspace . --max-steps 5
 python3.13 -m autonomy model setup
 python3.13 -m autonomy model setup ollama
 python3.13 -m autonomy model setup openai-api
+python3.13 -m autonomy model setup nvidia
 python3.13 -m autonomy --db /tmp/autonomy.db doctor
 python3.13 -m autonomy run "Analyze why this project's tests fail" --workspace .
 python3.13 -m autonomy inspect RUN_ID
@@ -58,7 +57,7 @@ python3.13 -m autonomy recipes list              # ActionRecipe commands
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring web-research browser-navigation website-inspection
+python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -69,7 +68,7 @@ python3.13 -m autonomy skills disable SKILL_NAME
 
 ## Interactive Session
 
-`autonomy` starts a terminal session. Natural language input first flows
+`autonomy` and `autonomy tui` start the terminal UI. Natural language input first flows
 through a model router that only decides `chat` or `task`. Chat turns then go
 to a separate responder that produces the natural reply without creating a
 `run_id` or executing tools. Clear task requests flow into `AgentLoop`, where
@@ -80,8 +79,7 @@ available as context for follow-up requests. `autonomy run "goal"` remains
 available for one-shot tasks and automation, and always treats the input as a
 task.
 
-`autonomy tui` starts a Hermes-inspired terminal UI around the same
-`ConversationLoop`. It renders a responsive startup banner, a session overview
+The TUI wraps the same `ConversationLoop`. It renders a responsive startup banner, a session overview
 panel, explicit runtime boundary notes, a compact status rule before each prompt
 with turn count, chat/task mix, and last-run state, transcript-style response
 panels, route classification, run metadata, an Action trail derived from the run
@@ -111,15 +109,17 @@ Session commands:
 
 ## Model Provider Setup
 
-The system supports `ollama` and `openai-api`. Run `autonomy model setup` from
-the workspace to choose a provider, endpoint, and model. Re-running setup is
-the only way to switch that workspace's provider or model.
+The system supports `ollama`, `openai-api`, and `nvidia`. Run
+`autonomy model setup` from the workspace to choose a provider, endpoint, and
+model. Re-running setup is the only way to switch that workspace's provider or
+model. The interactive setup shows the current configuration and accepts either
+numbered selections or provider/model names.
 
 Validated workspace configuration is stored under:
 
 ```text
 <workspace>/.autonomy/config.yaml  # active provider, endpoint, model, and timeout
-<workspace>/.autonomy/.env         # OpenAI API key, mode 0600
+<workspace>/.autonomy/.env         # provider API keys, mode 0600
 ```
 
 Live runs do not read legacy model environment variables, do not read
@@ -140,6 +140,21 @@ autonomy run "Read README.md and summarize the implemented system" \
 
 Ollama's base URL must include `/v1`. The default is
 `http://127.0.0.1:11434/v1`.
+
+### NVIDIA
+
+```bash
+autonomy model setup nvidia
+autonomy doctor
+autonomy run "Read README.md and summarize the implemented system" \
+  --workspace . \
+  --max-steps 5 \
+  --non-interactive
+```
+
+The default NVIDIA endpoint is `https://integrate.api.nvidia.com/v1`, the
+default model is `moonshotai/kimi-k2.6`, and the API key is stored as
+`NVIDIA_API_KEY` in the workspace `.autonomy/.env` file.
 
 ## Project Context
 
@@ -179,24 +194,22 @@ Inspect or change toolset exposure with:
 
 ```bash
 autonomy tools status
-autonomy tools enable web
 autonomy tools enable browser
 autonomy tools disable terminal
 ```
 
-The catalog includes implemented `web` and `browser` toolsets plus planned
-Hermes-like toolsets such as `memory`, `delegate`, `cronjob`, and
-`computer_use`. Planned or unavailable tools are not exposed to the agent loop.
-Enabling a toolset only controls which implemented and available tools are
-visible to planning; it does not grant extra permissions or bypass
-`ActionGateway`.
+The catalog includes implemented `browser` toolsets plus planned Hermes-like
+toolsets such as `memory`, `delegate`, `cronjob`, and `computer_use`. Planned
+or unavailable tools are not exposed to the agent loop. Enabling a toolset only
+controls which implemented and available tools are visible to planning; it does
+not grant extra permissions or bypass `ActionGateway`.
 
 Tool implementation code is grouped under `autonomy/tools/`:
 
 - `autonomy/tools/registry.py`: `ToolSpec`, `ToolRegistry`, and `ApprovalPolicy`
 - `autonomy/tools/local.py`: local registry assembly plus file/search/shell tools
 - `autonomy/tools/toolsets/`: toolset-specific implementations such as
-  `web`, `browser`, and `process`
+  `browser` and `process`
 
 The first implemented local software-engineering tools are:
 
@@ -295,14 +308,6 @@ from flooding the model context. Shell and managed process output also redacts
 common API keys, bearer tokens, credential assignments, and private key blocks
 before observations are written to the run journal.
 
-The implemented web tool is:
-
-- `web.search`
-
-`web.search` searches the public web through DuckDuckGo HTML and returns ranked
-result titles, URLs, and snippets. Web observations redact secret-like query
-parameters and result text before they are written to the run journal.
-
 The implemented browser tools use headless Chromium through Playwright:
 
 - `browser.navigate`
@@ -341,9 +346,9 @@ or evaluates a small diagnostic JavaScript expression in the current page.
 `browser.snapshot`. Browser observations redact secret-like page URLs, image
 URLs, console output, and diagnostic expression results before journaling.
 
-Read-only local and web fetch actions are low risk. File write/patch/trash,
-mkdir, and move actions and browser actions are medium risk. Unknown shell
-commands require interactive approval and are rejected in non-interactive mode.
+Read-only local actions are low risk. File write/patch/trash, mkdir, move, and
+browser actions are medium risk. Unknown shell commands require interactive
+approval and are rejected in non-interactive mode.
 File editing tools are workspace-only and text-only; use them instead of shell
 heredocs or in-place shell edits.
 
@@ -407,11 +412,11 @@ Hermes as an engineering reference without importing Hermes runtime or skill
 files. Bundled skill sources live under
 `autonomy/bundled_skills/<skill-name>/SKILL.md`; add a new bundled skill by
 creating that directory and matching the YAML frontmatter `name` to the
-directory name. Code editing, process, software-engineering, and web/browser
+directory name. Code editing, process, software-engineering, and browser
 planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring web-research browser-navigation website-inspection
+autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection
 ```
 
 These skills require the corresponding enabled and available tools before they

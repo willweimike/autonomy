@@ -5,5 +5,4 @@ tools:
   - search
   - skills
   - terminal
-  - web
   disabled_tools: []

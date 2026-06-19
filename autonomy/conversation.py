@@ -42,11 +42,14 @@ class ConversationLoop:
         store: AutonomyStore | None = None,
         session_id: str | None = None,
         recent_turn_limit: int = 6,
+        interface: str = "tui",
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         if recent_turn_limit < 1:
             raise ValueError("recent_turn_limit must be at least 1")
+        if not interface.strip():
+            raise ValueError("interface must not be empty")
         self.workspace = workspace.resolve()
         self.db_path = db_path
         self.max_steps = max_steps
@@ -56,6 +59,7 @@ class ConversationLoop:
         self.store = store or AutonomyStore(db_path)
         self.session_id = session_id or uuid.uuid4().hex
         self.recent_turn_limit = recent_turn_limit
+        self.interface = interface.strip()
         self.last_run_result: RunResult | None = None
         self.store.create_conversation_session(self.session_id, str(self.workspace))
 
@@ -116,7 +120,7 @@ class ConversationLoop:
             task_goal,
             max_steps=self.max_steps,
             interactive=True,
-            interface="chat",
+            interface=self.interface,
             conversation_context=conversation_context,
             journal_metadata={
                 "conversation_session_id": self.session_id,

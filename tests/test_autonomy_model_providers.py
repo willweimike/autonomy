@@ -11,7 +11,7 @@ from autonomy import (
     OpenAICompatibleProvider,
     ProviderConfigurationError,
 )
-from autonomy.providers import create_provider
+from autonomy.providers import PROVIDER_SPECS, create_provider
 
 
 class Response:
@@ -44,6 +44,32 @@ class AutonomyModelProviderTest(unittest.TestCase):
             self.assertEqual(store.load_openai_api_key(), "secret-value")
             self.assertNotIn("secret-value", store.config_path.read_text(encoding="utf-8"))
             self.assertEqual(store.env_path.stat().st_mode & 0o777, 0o600)
+
+    def test_nvidia_provider_spec_matches_build_endpoint(self):
+        spec = PROVIDER_SPECS["nvidia"]
+
+        self.assertEqual(spec.default_base_url, "https://integrate.api.nvidia.com/v1")
+        self.assertEqual(spec.default_model, "moonshotai/kimi-k2.6")
+        self.assertEqual(spec.api_key_name, "NVIDIA_API_KEY")
+        self.assertFalse(spec.supports_model_listing)
+
+    def test_nvidia_key_round_trips_without_openai_secret_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ModelConfigStore(Path(tmpdir))
+            configuration = ModelConfiguration(
+                "nvidia",
+                "moonshotai/kimi-k2.6",
+                "https://integrate.api.nvidia.com/v1",
+                120,
+            )
+            store.save(configuration, api_key="nvidia-secret")
+
+            self.assertEqual(store.load(), configuration)
+            self.assertEqual(store.load_api_key("nvidia"), "nvidia-secret")
+            self.assertEqual(store.existing_openai_api_key(), "")
+            self.assertNotIn("nvidia-secret", store.config_path.read_text(encoding="utf-8"))
+            self.assertIn("NVIDIA_API_KEY=", store.env_path.read_text(encoding="utf-8"))
+            self.assertNotIn("AUTONOMY_OPENAI_API_KEY", store.env_path.read_text(encoding="utf-8"))
 
     def test_legacy_environment_variables_are_not_configuration_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch.dict(
@@ -100,6 +126,53 @@ class AutonomyModelProviderTest(unittest.TestCase):
             },
         )
         self.assertNotIn("secret-value", repr(provider.journal_context))
+
+    def test_create_provider_uses_nvidia_secret_and_skips_model_listing_validation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ModelConfigStore(Path(tmpdir))
+            configuration = ModelConfiguration(
+                "nvidia",
+                "moonshotai/kimi-k2.6",
+                "https://integrate.api.nvidia.com/v1",
+                120,
+            )
+            store.save(configuration, api_key="nvidia-secret")
+            provider = create_provider(configuration, store)
+
+        response = Response(
+            json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]}).encode()
+        )
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            provider.validate()
+
+        self.assertEqual(len(urlopen.call_args_list), 1)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://integrate.api.nvidia.com/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer nvidia-secret")
+
+    def test_https_requests_use_certifi_ca_bundle_when_no_ssl_env_override(self):
+        provider = OpenAICompatibleProvider(
+            "nvidia",
+            "moonshotai/kimi-k2.6",
+            "nvidia-secret",
+            "https://integrate.api.nvidia.com/v1",
+            120,
+            validate_model_listing=False,
+        )
+        response = Response(
+            json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]}).encode()
+        )
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("autonomy.providers.certifi.where", return_value="/certifi/cacert.pem"),
+            patch("autonomy.providers.ssl.create_default_context") as create_context,
+            patch("urllib.request.urlopen", return_value=response) as urlopen,
+        ):
+            create_context.return_value = object()
+            provider.complete_json({"messages": []})
+
+        create_context.assert_called_once_with(cafile="/certifi/cacert.pem")
+        self.assertIs(urlopen.call_args.kwargs["context"], create_context.return_value)
 
     def test_provider_validate_checks_model_and_json_object_response(self):
         provider = OpenAICompatibleProvider(

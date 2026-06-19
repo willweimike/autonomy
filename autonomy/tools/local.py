@@ -18,7 +18,6 @@ from .registry import ToolRegistry
 from .redaction import redact_sensitive_text
 from .toolsets.browser import BrowserController, register_browser_tools
 from .toolsets.process import ProcessManager, register_process_tools
-from .toolsets.web import register_web_tools
 
 
 _BINARY_LIKE_EXTENSIONS = {
@@ -2510,7 +2509,6 @@ def build_local_tool_registry(
     process_manager = ProcessManager(root, redactor=redact_sensitive_text)
     register_process_tools(registry, process_manager)
     registry.register_cleanup(process_manager.close)
-    register_web_tools(registry)
     browser_controller = BrowserController(root / ".autonomy" / "browser-screenshots")
     register_browser_tools(
         registry,

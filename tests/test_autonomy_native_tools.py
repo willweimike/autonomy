@@ -1003,17 +1003,19 @@ def run_task():
         self.assertIn("shell.execute", registry.names)
         self.assertIn("process.start", registry.names)
 
-    def test_web_exposes_and_unavailable_browser_hides_tools(self):
+    def test_removed_web_toolset_is_rejected_and_unavailable_browser_hides_tools(self):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("autonomy.tools.browser_tools_available", return_value=(False, "missing browser")),
         ):
+            with self.assertRaisesRegex(ValueError, "unknown toolsets: web"):
+                ToolsetConfiguration(enabled_toolsets=("browser", "web")).validate()
             registry = build_local_tool_registry(
                 tmpdir,
-                ToolsetConfiguration(enabled_toolsets=("browser", "web")),
+                ToolsetConfiguration(enabled_toolsets=("browser",)),
             )
 
-        self.assertEqual(sorted(registry.names), ["web.search"])
+        self.assertEqual(sorted(registry.names), [])
 
     def test_disabled_individual_tool_is_not_available(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1826,136 +1828,6 @@ shutil.move(str(path), str(destination / path.name))
         self.assertIn("offset must be at least 0", offset_reason)
         self.assertIn("output_mode must be content, files_only, or count", output_mode_reason)
         self.assertIn("context must be at least 0", context_reason)
-
-    def test_web_search_parses_duckduckgo_html_results(self):
-        class Headers:
-            def get_content_charset(self):
-                return "utf-8"
-
-            def get(self, name, default=""):
-                return "text/html; charset=utf-8" if name == "content-type" else default
-
-        class Response:
-            status = 200
-            headers = Headers()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, traceback):
-                del exc_type, exc, traceback
-
-            def read(self, size=-1):
-                body = (
-                    "<html><body>"
-                    "<a class='result__a' href='https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Fone'>One Result</a>"
-                    "<a class='result__snippet'>First snippet</a>"
-                    "<a class='result__a' href='https://example.test/two'>Two Result</a>"
-                    "<div class='result__snippet'>Second snippet</div>"
-                    "</body></html>"
-                ).encode("utf-8")
-                return body if size < 0 else body[:size]
-
-            def geturl(self):
-                return "https://duckduckgo.com/html/?q=example"
-
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            patch("urllib.request.urlopen", return_value=Response()),
-        ):
-            registry = build_local_tool_registry(
-                tmpdir,
-                ToolsetConfiguration(enabled_toolsets=("web",)),
-            )
-            searched = registry.execute(
-                Action(
-                    "web.search",
-                    {"query": "example", "limit": 2},
-                    "search",
-                    "verify",
-                )
-            )
-
-        payload = json.loads(searched.output)
-        self.assertTrue(searched.succeeded)
-        self.assertEqual(payload["query"], "example")
-        self.assertEqual(payload["status"], 200)
-        self.assertEqual(payload["count"], 2)
-        self.assertEqual(payload["results"][0]["rank"], 1)
-        self.assertEqual(payload["results"][0]["title"], "One Result")
-        self.assertEqual(payload["results"][0]["url"], "https://example.test/one")
-        self.assertEqual(payload["results"][0]["snippet"], "First snippet")
-
-    def test_web_search_redacts_secret_like_urls_and_snippets(self):
-        secret = "sk-websecretvalue1234567890"
-
-        class Headers:
-            def get_content_charset(self):
-                return "utf-8"
-
-            def get(self, name, default=""):
-                return "text/html; charset=utf-8" if name == "content-type" else default
-
-        class Response:
-            status = 200
-            headers = Headers()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, traceback):
-                del exc_type, exc, traceback
-
-            def read(self, size=-1):
-                body = (
-                    f"<html><body>"
-                    f"<a class='result__a' href='https://example.test/?token={secret}'>Secret Result</a>"
-                    f"<a class='result__snippet'>OPENAI_API_KEY={secret}</a>"
-                    f"</body></html>"
-                ).encode("utf-8")
-                return body if size < 0 else body[:size]
-
-            def geturl(self):
-                return f"https://duckduckgo.com/html/?q=secret&api_key={secret}"
-
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            patch("urllib.request.urlopen", return_value=Response()),
-        ):
-            registry = build_local_tool_registry(
-                tmpdir,
-                ToolsetConfiguration(enabled_toolsets=("web",)),
-            )
-            searched = registry.execute(
-                Action("web.search", {"query": "secret"}, "search", "verify")
-            )
-
-        combined = "\n".join([searched.output, *searched.evidence])
-        payload = json.loads(searched.output)
-        self.assertTrue(searched.succeeded)
-        self.assertNotIn(secret, combined)
-        self.assertIn("OPENAI_API_KEY=***", searched.output)
-        self.assertIn("api_key=***", searched.output)
-        self.assertIn("token=***", payload["results"][0]["url"])
-        self.assertIn("web_redacted:true", searched.evidence)
-
-    def test_web_search_validates_query_and_reports_network_errors(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            registry = build_local_tool_registry(
-                tmpdir,
-                ToolsetConfiguration(enabled_toolsets=("web",)),
-            )
-            reason = registry.rejection_reason(
-                ActionIntent("web.search", {"query": ""}, "search")
-            )
-            with patch("urllib.request.urlopen", side_effect=OSError("network down")):
-                failed = registry.execute(
-                    Action("web.search", {"query": "example"}, "search", "verify")
-                )
-
-        self.assertIn("query must not be empty", reason)
-        self.assertFalse(failed.succeeded)
-        self.assertIn("web search failed", failed.error)
 
     def test_browser_tools_are_hidden_when_unavailable(self):
         with (

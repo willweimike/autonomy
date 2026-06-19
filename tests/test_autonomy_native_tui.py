@@ -516,7 +516,7 @@ class AutonomyTUITest(unittest.TestCase):
                         "step": 0,
                         "event_type": "run_started",
                         "payload": {
-                            "interface": "chat",
+                            "interface": "tui",
                             "model_provider": "ollama",
                             "model": "qwen2.5vl:7b",
                         },
@@ -611,7 +611,7 @@ class AutonomyTUITest(unittest.TestCase):
             output,
         )
         self.assertIn("Run timeline:", output)
-        self.assertIn("step 0: run started via chat", output)
+        self.assertIn("step 0: run started via tui", output)
         self.assertIn("candidates ranked: 1 · top: filesystem.read", output)
         self.assertIn("action selected: filesystem.read [low] · read project overview", output)
         self.assertIn("outcome: achieved (1.0) · README was summarized", output)
@@ -637,7 +637,7 @@ class AutonomyTUITest(unittest.TestCase):
                     {
                         "step": 0,
                         "event_type": "run_started",
-                        "payload": {"interface": "chat"},
+                        "payload": {"interface": "tui"},
                     },
                     {
                         "step": 1,

@@ -20,12 +20,6 @@ class ToolsetDefinition:
 
 
 TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
-    ToolsetDefinition(
-        "web",
-        "Web search tools.",
-        "implemented",
-        ("web.search",),
-    ),
     ToolsetDefinition("search", "Search tools.", "implemented", ("search.text",)),
     ToolsetDefinition("vision", "Image and visual understanding tools."),
     ToolsetDefinition("image_gen", "Image generation tools."),
