@@ -121,6 +121,31 @@ class ConversationLoopTest(unittest.TestCase):
             conversation["turns"][0]["id"],
         )
 
+    def test_first_input_passes_startup_memory_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = AutonomyStore(Path(tmpdir) / "autonomy.db")
+            store.create_memory(
+                scope="user",
+                wing="preference",
+                room="language",
+                content="Use Traditional Chinese for Autonomy architecture notes.",
+            )
+            agent_loop = RecordingAgentLoop()
+            loop = ConversationLoop(
+                workspace=Path(tmpdir),
+                db_path=Path(tmpdir) / "autonomy.db",
+                max_steps=4,
+                agent_loop_factory=lambda workspace, db_path: agent_loop,
+                responder=StaticResponder(),
+                store=store,
+                session_id="session",
+            )
+
+            response = loop.handle_user_input("inspect architecture")
+
+        self.assertIn("Persistent memory loaded at session start:", response.conversation_context)
+        self.assertIn("Use Traditional Chinese", agent_loop.calls[0]["conversation_context"])
+
     def test_assistant_respond_observation_is_used_as_reply(self):
         class AssistantRespondAgentLoop:
             def __init__(self, store):

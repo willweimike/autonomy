@@ -976,6 +976,10 @@ def run_task():
                     "filesystem.move",
                     "filesystem.tree",
                     "filesystem.write",
+                    "memory.forget",
+                    "memory.list",
+                    "memory.recall",
+                    "memory.remember",
                     "process.log",
                     "process.poll",
                     "process.start",
@@ -1097,6 +1101,89 @@ def run_task():
         }
 
         self.assertEqual(set(file_toolset.tools), implemented_file_tools)
+
+    def test_memory_toolset_remembers_recalls_lists_and_forgets_workspace_memory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("memory",)),
+            )
+
+            remembered = registry.execute(
+                Action(
+                    "memory.remember",
+                    {
+                        "content": "User prefers Traditional Chinese for Autonomy architecture notes.",
+                        "scope": "user",
+                        "wing": "preference",
+                        "room": "language",
+                    },
+                    "remember user preference",
+                    "verify persisted memory",
+                )
+            )
+            remembered_payload = json.loads(remembered.output)
+            memory_id = remembered_payload["id"]
+            recalled = registry.execute(
+                Action(
+                    "memory.recall",
+                    {"query": "Traditional Chinese architecture notes", "scope": "user"},
+                    "recall relevant preference",
+                    "verify recalled memory",
+                )
+            )
+            listed = registry.execute(
+                Action(
+                    "memory.list",
+                    {"scope": "user"},
+                    "list user memories",
+                    "verify memory list",
+                )
+            )
+            forgotten = registry.execute(
+                Action(
+                    "memory.forget",
+                    {"id": memory_id},
+                    "forget memory",
+                    "verify deletion",
+                )
+            )
+            recalled_after_forget = registry.execute(
+                Action(
+                    "memory.recall",
+                    {"query": "Traditional Chinese architecture notes", "scope": "user"},
+                    "recall after deletion",
+                    "verify deleted memory is absent",
+                )
+            )
+
+        self.assertTrue(remembered.succeeded, remembered.error)
+        self.assertEqual(remembered_payload["scope"], "user")
+        self.assertEqual(remembered_payload["wing"], "preference")
+        self.assertEqual(remembered_payload["room"], "language")
+        self.assertTrue(recalled.succeeded, recalled.error)
+        self.assertEqual(json.loads(recalled.output)["memories"][0]["id"], memory_id)
+        self.assertEqual(json.loads(listed.output)["memories"][0]["id"], memory_id)
+        self.assertTrue(forgotten.succeeded, forgotten.error)
+        self.assertEqual(json.loads(forgotten.output), {"forgotten": True, "id": memory_id})
+        self.assertEqual(json.loads(recalled_after_forget.output)["memories"], [])
+
+    def test_memory_toolset_catalog_lists_all_implemented_memory_tools(self):
+        memory_toolset = next(
+            definition for definition in TOOLSET_CATALOG if definition.name == "memory"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("memory",)),
+            )
+        implemented_memory_tools = {
+            name
+            for name in registry.names
+            if registry.spec(name).toolset == "memory"
+        }
+
+        self.assertEqual(set(memory_toolset.tools), implemented_memory_tools)
 
     def test_toolset_status_compacts_long_unavailable_reasons(self):
         long_reason = (

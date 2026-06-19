@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -18,6 +19,21 @@ from .models import (
     Transition,
     jsonable,
 )
+
+
+def format_memory_context(heading: str, memories: list[dict[str, Any]]) -> str:
+    if not memories:
+        return ""
+    lines = [heading]
+    for memory in memories:
+        content = str(memory["content"]).strip()
+        if len(content) > 300:
+            content = content[:300].rstrip() + "..."
+        lines.append(
+            f"- [{memory['scope']}/{memory['wing']}/{memory['room']}] "
+            f"{content} (id={memory['id']})"
+        )
+    return "\n".join(lines)
 
 
 class AutonomyStore:
@@ -130,6 +146,16 @@ class AutonomyStore:
                     reason TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    wing TEXT NOT NULL,
+                    room TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
@@ -559,6 +585,90 @@ class AutonomyStore:
             {**dict(row), "payload": json.loads(row["payload_json"])}
             for row in rows
         ]
+
+    def create_memory(
+        self,
+        *,
+        scope: str,
+        wing: str,
+        room: str,
+        content: str,
+        source_run_id: str = "",
+    ) -> dict[str, Any]:
+        memory_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memories
+                    (id, scope, wing, room, content, source_run_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (memory_id, scope, wing, room, content, source_run_id),
+            )
+            row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("memory insert did not persist")
+        return dict(row)
+
+    def list_memories(
+        self,
+        *,
+        scope: str | None = None,
+        wing: str | None = None,
+        room: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
+        if wing:
+            clauses.append("wing = ?")
+            params.append(wing)
+        if room:
+            clauses.append("room = ?")
+            params.append(room)
+        sql = "SELECT * FROM memories"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY updated_at DESC, id LIMIT ?"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def search_memories(
+        self,
+        query: str,
+        *,
+        scope: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        terms = [term.casefold() for term in query.split() if term.strip()]
+        if not terms:
+            return []
+        rows = self.list_memories(scope=scope, limit=500)
+
+        def score(memory: dict[str, Any]) -> int:
+            haystack = " ".join(
+                str(memory[field]).casefold()
+                for field in ("content", "wing", "room", "scope")
+            )
+            return sum(1 for term in terms if term in haystack)
+
+        ranked = [
+            (score(memory), memory)
+            for memory in rows
+        ]
+        ranked = [item for item in ranked if item[0] > 0]
+        ranked.sort(key=lambda item: (-item[0], item[1]["updated_at"], item[1]["id"]))
+        return [memory for _, memory in ranked[:limit]]
+
+    def forget_memory(self, memory_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        return cursor.rowcount > 0
 
     def successful_action_count(self, fingerprint: str) -> int:
         count = 0

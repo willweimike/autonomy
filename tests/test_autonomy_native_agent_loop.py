@@ -303,6 +303,34 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(started["conversation_session_id"], "session")
         self.assertEqual(started["conversation_turn_id"], "turn")
 
+    def test_agent_loop_loads_relevant_memory_into_state_and_journal(self):
+        class ContextModel(SequenceModel):
+            def __init__(self):
+                super().__init__([[candidate(goal_achieving=True)]])
+                self.contexts = []
+
+            def propose(self, state, available_tools, procedure_skills, tool_specs=None):
+                self.contexts.append(state.conversation_context)
+                return super().propose(state, available_tools, procedure_skills, tool_specs)
+
+        self.store.create_memory(
+            scope="workspace",
+            wing="model-provider",
+            room="nvidia",
+            content="NVIDIA uses https://integrate.api.nvidia.com/v1/chat/completions.",
+        )
+        model = ContextModel()
+
+        result = self.agent_loop(model).run("configure NVIDIA provider", interactive=False)
+
+        self.assertIn("Relevant persistent memory:", model.contexts[0])
+        self.assertIn("integrate.api.nvidia.com", model.contexts[0])
+        journal = self.store.inspect_run(result.run_id)
+        memory_event = next(
+            event for event in journal["events"] if event["event_type"] == "memory_loaded"
+        )
+        self.assertEqual(memory_event["payload"]["count"], 1)
+
     def test_agent_loop_passes_registry_tool_specs_to_model(self):
         class CapturingModel(SequenceModel):
             def __init__(self):
@@ -701,6 +729,20 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
                 if event["payload"]
             )
         )
+
+    def test_agent_loop_records_repeated_success_as_memory(self):
+        repeated = candidate()
+
+        self.agent_loop(SequenceModel([[repeated]])).run(
+            "repeat useful workflow",
+            max_steps=2,
+            interactive=False,
+        )
+
+        memories = self.store.list_memories(wing="workflow", room="repeated-action")
+        self.assertEqual(len(memories), 1)
+        self.assertIn("Repeated successful action", memories[0]["content"])
+        self.assertIn("test.tool", memories[0]["content"])
 
     def test_agent_loop_prefers_alternative_after_non_ok_action_repeat(self):
         first_bad = candidate(arguments={"name": "bad"}, purpose="try bad path")

@@ -7,7 +7,7 @@ from typing import Callable, Protocol
 from .conversation_responder import ConversationResponder
 from .models import ConversationDecision, ConversationMode, ConversationResponse, ConversationTurn, RunResult, TerminationReason
 from .providers import ModelClientError, ProviderConfigurationError
-from .store import AutonomyStore
+from .store import AutonomyStore, format_memory_context
 
 
 class AgentLoopRunner(Protocol):
@@ -59,6 +59,10 @@ class ConversationLoop:
         self.interface = interface.strip()
         self.last_run_result: RunResult | None = None
         self.store.create_conversation_session(self.session_id, str(self.workspace))
+        self.startup_memory_context = format_memory_context(
+            "Persistent memory loaded at session start:",
+            self.store.list_memories(limit=10),
+        )
 
     def set_workspace(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()
@@ -144,12 +148,15 @@ class ConversationLoop:
         )
 
     def _build_context(self) -> str:
+        sections: list[str] = []
+        if self.startup_memory_context:
+            sections.append(self.startup_memory_context)
         turns = self.store.list_conversation_turns(
             self.session_id,
             limit=self.recent_turn_limit,
         )
         if not turns:
-            return ""
+            return "\n\n".join(sections)
         lines = ["Recent conversation context:"]
         for turn in turns:
             content = turn.content.strip()
@@ -157,7 +164,8 @@ class ConversationLoop:
                 content = content[:1200] + "..."
             run_suffix = f" run_id={turn.run_id}" if turn.run_id else ""
             lines.append(f"- {turn.role}{run_suffix}: {content}")
-        return "\n".join(lines)
+        sections.append("\n".join(lines))
+        return "\n\n".join(sections)
 
     def _candidate_skills_for_run(self, run_id: str) -> list[dict]:
         try:

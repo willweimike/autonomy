@@ -23,7 +23,7 @@ from .project_context import ProjectContext
 from .recipes import RecipeEngine
 from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon
-from .store import AutonomyStore
+from .store import AutonomyStore, format_memory_context
 
 
 class AgentLoop:
@@ -110,10 +110,20 @@ class AgentLoop:
         if not interface.strip():
             raise ValueError("interface must not be empty")
 
+        relevant_memories = self.store.search_memories(goal.strip(), limit=5)
+        memory_context = format_memory_context(
+            "Relevant persistent memory:",
+            relevant_memories,
+        )
+        context_parts = [
+            part
+            for part in (conversation_context.strip(), memory_context)
+            if part
+        ]
         state = RunState(
             run_id=uuid.uuid4().hex,
             goal=Goal(goal.strip()),
-            conversation_context=conversation_context.strip(),
+            conversation_context="\n\n".join(context_parts),
             project_context=self.project_context.content if self.project_context else "",
         )
         self.store.create_run(state.run_id, state.goal.text)
@@ -139,6 +149,16 @@ class AgentLoop:
                     "chars": len(self.project_context.content),
                     "original_chars": self.project_context.original_chars,
                     "truncated": self.project_context.truncated,
+                },
+            )
+        if relevant_memories:
+            self.store.record_event(
+                state.run_id,
+                0,
+                "memory_loaded",
+                {
+                    "count": len(relevant_memories),
+                    "ids": [memory["id"] for memory in relevant_memories],
                 },
             )
         return state
@@ -318,6 +338,18 @@ class AgentLoop:
     def learn_from_transition(self, state: RunState, transition: Transition) -> None:
         learning_result = self.recipes.learn(transition)
         if learning_result:
+            if learning_result.created:
+                self.store.create_memory(
+                    scope="workspace",
+                    wing="workflow",
+                    room="repeated-action",
+                    content=(
+                        "Repeated successful action: "
+                        f"{transition.action.tool} {transition.action.arguments} "
+                        f"purpose={transition.action.purpose or transition.action.expected_effect}"
+                    ),
+                    source_run_id=state.run_id,
+                )
             self.store.record_event(
                 state.run_id,
                 state.step,

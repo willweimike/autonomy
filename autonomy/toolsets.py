@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 
-DEFAULT_ENABLED_TOOLSETS = ("assistant", "browser", "file", "terminal", "search", "skills")
+DEFAULT_ENABLED_TOOLSETS = ("assistant", "browser", "file", "terminal", "search", "skills", "memory")
 
 
 @dataclass(frozen=True)
@@ -101,7 +101,17 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
     ),
     ToolsetDefinition("skills", "Procedure skill management and discovery tools.", "implemented"),
     ToolsetDefinition("todo", "Task planning and tracking tools."),
-    ToolsetDefinition("memory", "Persistent memory tools."),
+    ToolsetDefinition(
+        "memory",
+        "Persistent memory tools.",
+        "implemented",
+        (
+            "memory.remember",
+            "memory.recall",
+            "memory.list",
+            "memory.forget",
+        ),
+    ),
     ToolsetDefinition("session_search", "Conversation history search tools."),
     ToolsetDefinition("clarify", "Clarifying question tools."),
     ToolsetDefinition("code_execution", "Programmatic code execution tools."),

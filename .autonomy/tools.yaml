@@ -7,4 +7,5 @@ tools:
   - search
   - skills
   - terminal
+  - memory
   disabled_tools: []
