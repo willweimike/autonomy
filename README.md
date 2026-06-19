@@ -57,7 +57,7 @@ python3.13 -m autonomy recipes list              # ActionRecipe commands
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection
+python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -436,6 +436,7 @@ Initial workspace skills can be installed under `<workspace>/.autonomy/skills/`:
 - `plan`
 - `writing-plans`
 - `procedure-skill-authoring`
+- `email-himalaya`
 
 Bundled Procedure Skills are Autonomy-native workflow guidance, adapted from
 Hermes as an engineering reference without importing Hermes runtime or skill
@@ -446,7 +447,7 @@ directory name. Code editing, process, software-engineering, and browser
 planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection
+autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya
 ```
 
 These skills require the corresponding enabled and available tools before they

@@ -368,6 +368,27 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
                 "procedure-skill-authoring",
             }.issubset(installed_names)
         )
+        self.assertIn("email-himalaya", installed_names)
+
+    def test_email_himalaya_bundled_skill_uses_governed_shell_only(self):
+        installed = self.library.install_bundled(["email-himalaya"])
+        available_tools = {"shell.execute"}
+
+        self.assertEqual([summary.name for summary in installed], ["email-himalaya"])
+        self.assertEqual(installed[0].requires_tools, ("shell.execute",))
+        self.assertEqual(
+            [summary.name for summary in self.library.index(available_tools)],
+            ["email-himalaya"],
+        )
+        self.assertEqual(self.library.index(set()), [])
+
+        skill = self.library.view("email-himalaya", available_tools)
+        self.assertIn("himalaya --version", skill.body)
+        self.assertIn("Do not read secret-bearing config values", skill.body)
+        self.assertIn("--output json", skill.body)
+        self.assertIn("Do not retry a failed send automatically", skill.body)
+        self.assertIn("template send", skill.body)
+        self.assertIn("guidance only", skill.body)
 
     def test_bundled_skill_names_are_loaded_from_skill_files(self):
         skill_files = sorted(BUNDLED_SKILLS_DIR.glob("*/SKILL.md"))
