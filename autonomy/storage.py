@@ -9,23 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
-MIGRATION_MARKER = "storage-migration.json"
-LEGACY_STORAGE_ITEMS = (
-    "config.yaml",
-    ".env",
-    "tools.yaml",
-    "autonomy.db",
-    "skills",
-    "skill-candidates",
-)
-
-
 def workspace_autonomy_home(workspace: str | Path | None = None) -> Path:
     return (Path(workspace) if workspace is not None else Path.cwd()).expanduser().resolve() / ".autonomy"
-
-
-def legacy_autonomy_home() -> Path:
-    return Path.home() / ".autonomy"
 
 
 def workspace_db_path(workspace: str | Path | None = None) -> Path:

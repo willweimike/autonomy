@@ -24,6 +24,7 @@ from .recipes import RecipeEngine
 from .selection import CandidateSelector
 from .skill_curator import CuratorDaemon
 from .store import AutonomyStore, format_memory_context
+from .tools.redaction import redact_jsonable
 
 
 class AgentLoop:
@@ -339,13 +340,14 @@ class AgentLoop:
         learning_result = self.recipes.learn(transition)
         if learning_result:
             if learning_result.created:
+                redacted_arguments, _ = redact_jsonable(transition.action.arguments)
                 self.store.create_memory(
                     scope="workspace",
                     wing="workflow",
                     room="repeated-action",
                     content=(
                         "Repeated successful action: "
-                        f"{transition.action.tool} {transition.action.arguments} "
+                        f"{transition.action.tool} {redacted_arguments} "
                         f"purpose={transition.action.purpose or transition.action.expected_effect}"
                     ),
                     source_run_id=state.run_id,

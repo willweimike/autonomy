@@ -14,6 +14,13 @@ class AutonomyWorkspaceStorageTest(unittest.TestCase):
             self.assertEqual(workspace_autonomy_home(workspace), workspace.resolve() / ".autonomy")
             self.assertEqual(workspace_db_path(workspace), workspace.resolve() / ".autonomy" / "autonomy.db")
 
+    def test_legacy_home_storage_api_is_not_exposed(self):
+        import autonomy.storage as storage
+
+        self.assertFalse(hasattr(storage, "MIGRATION_MARKER"))
+        self.assertFalse(hasattr(storage, "LEGACY_STORAGE_ITEMS"))
+        self.assertFalse(hasattr(storage, "legacy_autonomy_home"))
+
     
 
 

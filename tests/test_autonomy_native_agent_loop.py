@@ -744,6 +744,20 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertIn("Repeated successful action", memories[0]["content"])
         self.assertIn("test.tool", memories[0]["content"])
 
+    def test_agent_loop_redacts_secret_arguments_in_repeated_success_memory(self):
+        repeated = candidate(arguments={"api_key": "sk-testsecret1234567890"})
+
+        self.agent_loop(SequenceModel([[repeated]])).run(
+            "repeat useful workflow",
+            max_steps=2,
+            interactive=False,
+        )
+
+        memories = self.store.list_memories(wing="workflow", room="repeated-action")
+        self.assertEqual(len(memories), 1)
+        self.assertIn("'api_key': '***'", memories[0]["content"])
+        self.assertNotIn("sk-testsecret1234567890", memories[0]["content"])
+
     def test_agent_loop_prefers_alternative_after_non_ok_action_repeat(self):
         first_bad = candidate(arguments={"name": "bad"}, purpose="try bad path")
         second_bad = candidate(arguments={"name": "bad"}, purpose="retry bad path")
