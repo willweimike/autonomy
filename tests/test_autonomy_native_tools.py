@@ -150,6 +150,23 @@ class AutonomyNativeToolsTest(unittest.TestCase):
         self.assertIn("OPENAI_API_KEY=***", observation.output)
         self.assertIn("stdout_redacted:true", observation.evidence)
 
+    def test_shell_execute_supports_shell_operators(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(tmpdir)
+
+            observation = registry.execute(
+                Action(
+                    "shell.execute",
+                    {"command": "false || printf recovered"},
+                    "recover with shell operator",
+                    "verify",
+                )
+            )
+
+        self.assertTrue(observation.succeeded)
+        self.assertEqual(observation.output, "recovered")
+        self.assertEqual(observation.exit_code, 0)
+
     def test_filesystem_read_supports_line_pagination_for_large_contexts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

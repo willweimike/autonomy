@@ -2013,13 +2013,14 @@ def build_local_tool_registry(
         timeout = min(int(arguments.get("timeout", 60)), 300)
         max_chars = _coerce_shell_output_limit(arguments)
         completed = subprocess.run(
-            shlex.split(command),
+            command,
             cwd=root,
             capture_output=True,
             text=True,
             timeout=timeout,
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             check=False,
+            shell=True,
         )
         redacted_stdout, stdout_redacted = redact_sensitive_text(completed.stdout)
         redacted_stderr, stderr_redacted = redact_sensitive_text(completed.stderr)

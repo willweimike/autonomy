@@ -168,6 +168,70 @@ class ConversationLoopTest(unittest.TestCase):
 
         self.assertEqual(response.reply, "你好，我是 Autonomy。")
 
+    def test_blocked_run_uses_deterministic_failure_summary(self):
+        class BlockedAgentLoop:
+            def __init__(self, store):
+                self.store = store
+
+            def run(self, goal, max_steps=12, interactive=True, interface="run", conversation_context="", journal_metadata=None):
+                del goal, max_steps, interactive, interface, conversation_context, journal_metadata
+                run_id = "run-1"
+                self.store.create_run(run_id, "send email")
+                self.store.record_event(
+                    run_id,
+                    1,
+                    "action_selected",
+                    {
+                        "tool": "shell.execute",
+                        "purpose": "Check if a command-line mail sending tool is available.",
+                    },
+                )
+                self.store.record_event(
+                    run_id,
+                    1,
+                    "observation",
+                    {
+                        "succeeded": False,
+                        "output": "/usr/sbin/sendmail\n/usr/bin/mail\n",
+                        "error": "",
+                        "exit_code": 1,
+                    },
+                )
+                result = RunResult(
+                    run_id=run_id,
+                    goal="send email",
+                    termination=TerminationReason.BLOCKED,
+                    steps_executed=1,
+                    reason="shell.execute failed with exit_code 1",
+                )
+                self.store.complete_run(result)
+                return result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = AutonomyStore(Path(tmpdir) / "autonomy.db")
+            responder = StaticResponder(task_reply="The email has been sent successfully.")
+            loop = ConversationLoop(
+                workspace=Path(tmpdir),
+                db_path=Path(tmpdir) / "autonomy.db",
+                max_steps=4,
+                agent_loop_factory=lambda _workspace, _db_path: BlockedAgentLoop(store),
+                responder=responder,
+                store=store,
+                session_id="session",
+            )
+
+            response = loop.handle_user_input("send email")
+
+        self.assertEqual(responder.task_calls, [])
+        self.assertIn("Task did not complete.", response.reply)
+        self.assertIn("termination: blocked", response.reply)
+        self.assertIn("reason: shell.execute failed with exit_code 1", response.reply)
+        self.assertIn("selected action: shell.execute", response.reply)
+        self.assertIn("observation: failed", response.reply)
+        self.assertIn("exit_code: 1", response.reply)
+        self.assertIn("/usr/sbin/sendmail", response.reply)
+        self.assertNotIn("sent successfully", response.reply)
+
     def test_task_response_includes_new_action_recipe_candidates_only(self):
         class RecipeCandidateAgentLoop:
             def __init__(self, store):

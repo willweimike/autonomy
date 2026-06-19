@@ -29,7 +29,7 @@ class DeterministicOutcomeEvaluator:
             return Outcome(
                 execution_ok=False,
                 goal_status=GoalStatus.BLOCKED,
-                reason=observation.error or "action failed",
+                reason=self._failed_observation_reason(action, observation),
                 evidence=observation.evidence,
                 confidence=1.0,
             )
@@ -56,6 +56,24 @@ class DeterministicOutcomeEvaluator:
             evidence=observation.evidence,
             confidence=1.0,
         )
+
+    @staticmethod
+    def _failed_observation_reason(action: Action, observation: Observation) -> str:
+        parts = [f"{action.tool} failed"]
+        if observation.exit_code is not None:
+            parts.append(f"exit_code {observation.exit_code}")
+        if observation.error.strip():
+            parts.append("error: " + DeterministicOutcomeEvaluator._short_text(observation.error))
+        elif observation.output.strip():
+            parts.append("output: " + DeterministicOutcomeEvaluator._short_text(observation.output))
+        return "; ".join(parts)
+
+    @staticmethod
+    def _short_text(text: str, limit: int = 300) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
 
 
 class ModelAssistedOutcomeEvaluator:

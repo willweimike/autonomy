@@ -321,9 +321,11 @@ are blocked from file read/list/search/write/patch tools to avoid putting
 credentials into model context. Use `.env.example` when configuration shape is
 needed.
 
-Use `shell.execute` for short foreground commands. Use `process.start` for
-dev servers, watchers, long tests, or other commands that need later
-inspection through `process.poll`, `process.log`, or `process.wait`.
+Use `shell.execute` for short foreground commands. It runs the command string
+through the platform shell, so shell operators such as `||`, `&&`, and pipes
+use normal shell semantics. Use `process.start` for dev servers, watchers,
+long tests, or other commands that need later inspection through
+`process.poll`, `process.log`, or `process.wait`.
 `process.stop` terminates managed background processes. Starting and stopping
 processes are medium-risk actions and still require approval in interactive
 use; non-interactive runs reject them by default.

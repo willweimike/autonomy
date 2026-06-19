@@ -208,6 +208,8 @@ class ConversationLoop:
                 "I could not start the task because the model did not return valid structured "
                 f"JSON for planning. No tool action was executed. Reason: {result.reason}"
             )
+        elif result.termination != TerminationReason.ACHIEVED:
+            summary = self._deterministic_incomplete_summary(result)
         else:
             try:
                 summary = self.responder.summarize_task_result(
@@ -226,6 +228,52 @@ class ConversationLoop:
                 f"steps: {result.steps_executed}",
             ]
         )
+
+    def _deterministic_incomplete_summary(self, result: RunResult) -> str:
+        lines = [
+            "Task did not complete.",
+            f"termination: {result.termination.value}",
+            f"reason: {result.reason}",
+        ]
+        try:
+            journal = self.store.inspect_run(result.run_id)
+        except KeyError:
+            return "\n".join(lines)
+
+        selected_action: dict | None = None
+        latest_observation: dict | None = None
+        for event in journal["events"]:
+            payload = event["payload"]
+            if event["event_type"] == "action_selected" and isinstance(payload, dict):
+                selected_action = payload
+            elif event["event_type"] == "observation" and isinstance(payload, dict):
+                latest_observation = payload
+
+        if selected_action:
+            tool = str(selected_action.get("tool", "")).strip()
+            purpose = str(selected_action.get("purpose", "")).strip()
+            action_line = f"selected action: {tool}" if tool else "selected action: unknown"
+            if purpose:
+                action_line += f" · {purpose}"
+            lines.append(action_line)
+        if latest_observation:
+            succeeded = latest_observation.get("succeeded") is True
+            lines.append(f"observation: {'succeeded' if succeeded else 'failed'}")
+            if latest_observation.get("exit_code") is not None:
+                lines.append(f"exit_code: {latest_observation['exit_code']}")
+            error = str(latest_observation.get("error", "")).strip()
+            output = str(latest_observation.get("output", "")).strip()
+            if error:
+                lines.append(f"error: {self._short_observation_text(error)}")
+            if output:
+                lines.append(f"output: {self._short_observation_text(output)}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _short_observation_text(text: str, limit: int = 500) -> str:
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
 
     def _assistant_response_for_run(self, run_id: str) -> str:
         try:
