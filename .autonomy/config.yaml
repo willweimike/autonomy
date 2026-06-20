@@ -1,6 +1,0 @@
-version: 1
-model:
-  provider: nvidia
-  model: moonshotai/kimi-k2.6
-  base_url: https://integrate.api.nvidia.com/v1
-  timeout: 120

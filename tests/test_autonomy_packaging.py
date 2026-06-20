@@ -16,3 +16,9 @@ def test_readme_has_fresh_clone_quickstart_for_mac_and_linux():
     assert 'python -m pip install -e ".[dev]"' in text
     assert "autonomy model setup" in text
     assert "autonomy doctor" in text
+
+
+def test_workspace_runtime_state_is_gitignored():
+    text = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert ".autonomy/" in text
