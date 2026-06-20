@@ -1,4 +1,29 @@
-# Autonomy-Native AI System
+# Autonomy - Self-Discipline/Self-Harness Agent Focus on Enterprise
+
+<img src="./assets/autonomy_icon.png" alt="Autonomy" width="300">
+
+## Requirements
+
+- Python 3.13+
+- Ollama or an API key for a supported OpenAI-compatible provider
+
+## Quickstart: macOS and Linux
+
+Clone the repository, create an isolated Python environment, install this
+checkout, configure a model provider, then run the TUI:
+
+```bash
+git clone https://github.com/willweimike/autonomy.git
+cd autonomy
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+autonomy --help
+autonomy model setup
+autonomy doctor
+autonomy tui
+```
 
 This project builds an AI system around a skill-aware autonomy loop:
 
@@ -29,9 +54,6 @@ Procedure Skill -> planning knowledge from SKILL.md
 ActionRecipe    -> successful single-action template learned from tool use
 CandidatePath   -> current-turn candidate, not long-term graph memory
 ```
-
-Hermes Agent is retained only as a read-only engineering reference. It is not
-a runtime dependency.
 
 ## Requirements
 
