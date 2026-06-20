@@ -390,6 +390,27 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         self.assertIn("template send", skill.body)
         self.assertIn("guidance only", skill.body)
 
+    def test_database_retrieval_bundled_skill_requires_database_tool(self):
+        installed = self.library.install_bundled(["database-retrieval"])
+        available_tools = {"database.retrieve"}
+
+        self.assertEqual([summary.name for summary in installed], ["database-retrieval"])
+        self.assertEqual(installed[0].requires_tools, ("database.retrieve",))
+        self.assertEqual(
+            [summary.name for summary in self.library.index(available_tools)],
+            ["database-retrieval"],
+        )
+        self.assertEqual(self.library.index(set()), [])
+
+        skill = self.library.view("database-retrieval", available_tools)
+        self.assertIn("database.retrieve", skill.body)
+        self.assertIn("read-only SELECT", skill.body)
+        self.assertIn("SQLGlot", skill.body)
+        self.assertIn("action: schema", skill.body)
+        self.assertIn("action: generate", skill.body)
+        self.assertIn("action: query", skill.body)
+        self.assertIn("guidance only", skill.body)
+
     def test_bundled_skill_names_are_loaded_from_skill_files(self):
         skill_files = sorted(BUNDLED_SKILLS_DIR.glob("*/SKILL.md"))
         file_names = tuple(sorted(path.parent.name for path in skill_files))

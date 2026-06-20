@@ -1185,6 +1185,167 @@ def run_task():
 
         self.assertEqual(set(memory_toolset.tools), implemented_memory_tools)
 
+    def test_database_retrieve_reads_sqlite_schema_and_rejects_mutations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "sample.db"
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, total REAL)")
+                conn.execute("CREATE TABLE secrets (value TEXT)")
+                conn.execute("INSERT INTO orders (customer, total) VALUES ('Ada', 12.5)")
+                conn.execute("INSERT INTO orders (customer, total) VALUES ('Linus', 20.0)")
+                conn.execute("INSERT INTO secrets (value) VALUES ('hidden')")
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "database_connections.yaml").write_text(
+                "connections:\n"
+                "  sample:\n"
+                "    dialect: sqlite\n"
+                "    path: sample.db\n"
+                "    allowed_tables: [orders]\n",
+                encoding="utf-8",
+            )
+            registry = build_local_tool_registry(
+                root,
+                ToolsetConfiguration(enabled_toolsets=("database",)),
+            )
+
+            schema = registry.execute(
+                Action(
+                    "database.retrieve",
+                    {"action": "schema", "database_id": "sample"},
+                    "inspect schema",
+                    "verify",
+                )
+            )
+            query = registry.execute(
+                Action(
+                    "database.retrieve",
+                    {
+                        "action": "query",
+                        "database_id": "sample",
+                        "sql": "SELECT customer, total FROM orders ORDER BY total DESC",
+                        "max_rows": 1,
+                    },
+                    "read rows",
+                    "verify",
+                )
+            )
+            mutation = registry.execute(
+                Action(
+                    "database.retrieve",
+                    {"action": "query", "database_id": "sample", "sql": "DROP TABLE orders"},
+                    "drop table",
+                    "verify",
+                )
+            )
+            blocked_table = registry.execute(
+                Action(
+                    "database.retrieve",
+                    {"action": "query", "database_id": "sample", "sql": "SELECT value FROM secrets"},
+                    "read blocked table",
+                    "verify",
+                )
+            )
+
+        self.assertIn("database.retrieve", registry.names)
+        self.assertEqual(registry.spec("database.retrieve").toolset, "database")
+        self.assertTrue(schema.succeeded, schema.error)
+        self.assertIn('"orders"', schema.output)
+        self.assertTrue(query.succeeded, query.error)
+        self.assertEqual(json.loads(query.output)["rows"], [{"customer": "Linus", "total": 20.0}])
+        self.assertFalse(mutation.succeeded)
+        self.assertIn("Only read-only SELECT queries are allowed", mutation.error)
+        self.assertFalse(blocked_table.succeeded)
+        self.assertIn("query references tables outside allowed_tables: secrets", blocked_table.error)
+
+    def test_database_toolset_catalog_lists_implemented_database_tool(self):
+        database_toolset = next(
+            definition for definition in TOOLSET_CATALOG if definition.name == "database"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("database",)),
+            )
+        implemented_database_tools = {
+            name
+            for name in registry.names
+            if registry.spec(name).toolset == "database"
+        }
+
+        self.assertEqual(set(database_toolset.tools), implemented_database_tools)
+
+    def test_database_retrieve_uses_sqlglot_for_dialect_validation_and_generation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "sample.db"
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, total REAL)")
+                conn.execute("INSERT INTO orders (customer, total) VALUES ('Ada', 12.5)")
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "database_connections.yaml").write_text(
+                "connections:\n"
+                "  sample:\n"
+                "    dialect: sqlite\n"
+                "    path: sample.db\n"
+                "    allowed_tables: [orders]\n",
+                encoding="utf-8",
+            )
+            registry = build_local_tool_registry(
+                root,
+                ToolsetConfiguration(enabled_toolsets=("database",)),
+            )
+
+            validate = registry.execute(
+                Action(
+                    "database.retrieve",
+                    {
+                        "action": "validate",
+                        "database_id": "sample",
+                        "source_dialect": "mysql",
+                        "sql": "SELECT `customer`, total FROM orders",
+                        "max_rows": 5,
+                    },
+                    "validate mysql sql",
+                    "verify",
+                )
+            )
+            with patch(
+                "autonomy.tools.toolsets.database._call_sql_generation_llm",
+                return_value="SELECT customer, total FROM orders ORDER BY total DESC",
+            ) as generator:
+                generated = registry.execute(
+                    Action(
+                        "database.retrieve",
+                        {
+                            "action": "generate",
+                            "database_id": "sample",
+                            "request": "largest orders",
+                            "source_dialect": "postgres",
+                            "max_rows": 5,
+                        },
+                        "generate sql",
+                        "verify",
+                    )
+                )
+
+        self.assertTrue(validate.succeeded, validate.error)
+        validate_payload = json.loads(validate.output)
+        self.assertEqual(validate_payload["source_dialect"], "mysql")
+        self.assertEqual(validate_payload["target_dialect"], "sqlite")
+        self.assertEqual(validate_payload["referenced_tables"], ["orders"])
+        self.assertIn("LIMIT 5", validate_payload["sql"])
+        self.assertTrue(generated.succeeded, generated.error)
+        generated_payload = json.loads(generated.output)
+        self.assertEqual(generated_payload["action"], "generate")
+        self.assertFalse(generated_payload["executed"])
+        self.assertIn("ORDER BY total DESC", generated_payload["sql"])
+        self.assertEqual(generator.call_count, 1)
+
     def test_toolset_status_compacts_long_unavailable_reasons(self):
         long_reason = (
             "BrowserType.launch: Target page, context or browser has been closed\n"

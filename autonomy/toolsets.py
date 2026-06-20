@@ -112,6 +112,12 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
             "memory.forget",
         ),
     ),
+    ToolsetDefinition(
+        "database",
+        "SQLGlot-backed read-only database retrieval and SQL generation tools.",
+        "implemented",
+        ("database.retrieve",),
+    ),
     ToolsetDefinition("session_search", "Conversation history search tools."),
     ToolsetDefinition("clarify", "Clarifying question tools."),
     ToolsetDefinition("code_execution", "Programmatic code execution tools."),

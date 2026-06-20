@@ -115,7 +115,7 @@ python3.13 -m autonomy recipes list              # ActionRecipe commands
 python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
-python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya
+python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya database-retrieval
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -271,16 +271,43 @@ Inspect or change toolset exposure with:
 ```bash
 autonomy tools status
 autonomy tools enable project
+autonomy tools enable database
 autonomy tools enable browser
 autonomy tools disable terminal
 ```
 
-The catalog includes implemented `project`, `browser`, and `memory` toolsets
-plus planned Hermes-like toolsets such as `delegate`, `cronjob`, and
-`computer_use`. Planned or unavailable tools are not exposed to the agent loop.
+The catalog includes implemented `project`, `browser`, `memory`, and
+`database` toolsets plus planned Hermes-like toolsets such as `delegate`,
+`cronjob`, and `computer_use`. Planned or unavailable tools are not exposed to
+the agent loop.
 Enabling a toolset only controls which implemented and available tools are
 visible to planning; it does not grant extra permissions or bypass
 `ActionGateway`.
+
+Configure databases for the `database.retrieve` tool in:
+
+```yaml
+# <workspace>/.autonomy/database_connections.yaml
+connections:
+  sample:
+    dialect: sqlite
+    path: sample.db
+    allowed_tables: [orders]
+  warehouse:
+    dialect: postgres
+    allowed_tables: [orders]
+    schema:
+      tables:
+        orders:
+          id: integer
+          total: numeric
+```
+
+The tool uses SQLGlot to validate and transpile read-only SQL across dialects,
+and `action: generate` can ask the configured workspace model to draft SQL from
+a natural-language request before validation. SQLite paths are
+workspace-bounded and executable; other dialects support configured schema,
+validation, transpilation, and generation until a connector is added.
 
 Tool implementation code is grouped under `autonomy/tools/`:
 
@@ -500,6 +527,7 @@ Initial workspace skills can be installed under `<workspace>/.autonomy/skills/`:
 - `writing-plans`
 - `procedure-skill-authoring`
 - `email-himalaya`
+- `database-retrieval`
 
 Bundled Procedure Skills are Autonomy-native workflow guidance, adapted from
 Hermes as an engineering reference without importing Hermes runtime or skill
@@ -510,7 +538,7 @@ directory name. Code editing, process, software-engineering, and browser
 planning skills can be installed from bundled templates:
 
 ```bash
-autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya
+autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya database-retrieval
 ```
 
 These skills require the corresponding enabled and available tools before they

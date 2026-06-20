@@ -3,7 +3,7 @@ name = "whole-new-agentic-system"
 version = "0.1.0"
 description = "An autonomy-native AI system with a governed observe-decide-act-learn loop."
 requires-python = ">=3.13"
-dependencies = ["PyYAML>=6.0", "certifi>=2024.0.0", "playwright>=1.49.0"]
+dependencies = ["PyYAML>=6.0", "certifi>=2024.0.0", "playwright>=1.49.0", "sqlglot>=26.0.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=9.0"]
