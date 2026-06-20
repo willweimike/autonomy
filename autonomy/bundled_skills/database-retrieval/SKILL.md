@@ -20,6 +20,8 @@ Workflow:
 - Use `action: schema` before writing SQL for an unfamiliar database.
 - Use `action: validate` when the SQL is complex, user-provided, or written in a
   non-target dialect. SQLGlot validates and transpiles it.
+- Use `action: explain` before executing a complex SQLite query when the query
+  plan matters.
 - Use `action: generate` when the user asks a data question but no SQL is
   provided; inspect the generated SQL before relying on it for high-stakes
   answers.

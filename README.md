@@ -305,7 +305,8 @@ connections:
 
 The tool uses SQLGlot to validate and transpile read-only SQL across dialects,
 and `action: generate` can ask the configured workspace model to draft SQL from
-a natural-language request before validation. SQLite paths are
+a natural-language request before validation. Use `action: explain` to inspect a
+SQLite query plan before running a complex query. SQLite paths are
 workspace-bounded and executable; other dialects support configured schema,
 validation, transpilation, and generation until a connector is added.
 

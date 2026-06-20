@@ -1346,6 +1346,107 @@ def run_task():
         self.assertIn("ORDER BY total DESC", generated_payload["sql"])
         self.assertEqual(generator.call_count, 1)
 
+    def test_database_retrieve_generates_executes_and_reports_provenance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "sample.db"
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, total REAL)")
+                conn.execute("INSERT INTO orders (customer, total) VALUES ('Ada', 12.5)")
+                conn.execute("INSERT INTO orders (customer, total) VALUES ('Linus', 20.0)")
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "database_connections.yaml").write_text(
+                "connections:\n"
+                "  sample:\n"
+                "    dialect: sqlite\n"
+                "    path: sample.db\n"
+                "    allowed_tables: [orders]\n",
+                encoding="utf-8",
+            )
+            registry = build_local_tool_registry(
+                root,
+                ToolsetConfiguration(enabled_toolsets=("database",)),
+            )
+
+            with patch(
+                "autonomy.tools.toolsets.database._call_sql_generation_llm",
+                return_value="SELECT customer, total FROM orders ORDER BY total DESC",
+            ) as generator:
+                retrieved = registry.execute(
+                    Action(
+                        "database.retrieve",
+                        {
+                            "action": "retrieve",
+                            "database_id": "sample",
+                            "request": "largest order",
+                            "source_dialect": "postgres",
+                            "max_rows": 1,
+                        },
+                        "generate and retrieve",
+                        "verify",
+                    )
+                )
+
+        self.assertTrue(retrieved.succeeded, retrieved.error)
+        payload = json.loads(retrieved.output)
+        self.assertEqual(payload["action"], "retrieve")
+        self.assertTrue(payload["executed"])
+        self.assertTrue(payload["generated"])
+        self.assertEqual(payload["request"], "largest order")
+        self.assertIn("ORDER BY total DESC", payload["generated_sql"])
+        self.assertEqual(payload["raw_sql"], "SELECT customer, total FROM orders ORDER BY total DESC")
+        self.assertEqual(payload["source_dialect"], "postgres")
+        self.assertEqual(payload["target_dialect"], "sqlite")
+        self.assertEqual(payload["rows"], [{"customer": "Linus", "total": 20.0}])
+        self.assertEqual(generator.call_count, 1)
+
+    def test_database_retrieve_explains_sqlite_query_plan(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "sample.db"
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, total REAL)")
+                conn.execute("INSERT INTO orders (customer, total) VALUES ('Ada', 12.5)")
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "database_connections.yaml").write_text(
+                "connections:\n"
+                "  sample:\n"
+                "    dialect: sqlite\n"
+                "    path: sample.db\n"
+                "    allowed_tables: [orders]\n",
+                encoding="utf-8",
+            )
+            registry = build_local_tool_registry(
+                root,
+                ToolsetConfiguration(enabled_toolsets=("database",)),
+            )
+
+            explained = registry.execute(
+                Action(
+                    "database.retrieve",
+                    {
+                        "action": "explain",
+                        "database_id": "sample",
+                        "sql": "SELECT customer FROM orders WHERE total > 10",
+                        "max_rows": 5,
+                    },
+                    "explain query",
+                    "verify",
+                )
+            )
+
+        self.assertTrue(explained.succeeded, explained.error)
+        payload = json.loads(explained.output)
+        self.assertEqual(payload["action"], "explain")
+        self.assertFalse(payload["executed"])
+        self.assertEqual(payload["referenced_tables"], ["orders"])
+        self.assertIn("plan", payload)
+        self.assertTrue(any("orders" in row.get("detail", "").lower() for row in payload["plan"]))
+
     def test_toolset_status_compacts_long_unavailable_reasons(self):
         long_reason = (
             "BrowserType.launch: Target page, context or browser has been closed\n"

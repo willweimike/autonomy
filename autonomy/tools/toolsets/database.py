@@ -389,6 +389,41 @@ def _query(config: dict[str, Any], database_id: str, arguments: dict[str, Any]) 
     }
 
 
+def _explain(config: dict[str, Any], database_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if config["dialect"] != "sqlite":
+        raise DatabaseRetrievalError(f"explain for dialect '{config['dialect']}' is not implemented")
+    validation = _validate_sql(config, database_id, arguments)
+    sql = validation["sql"]
+    _reject_disallowed_tables(config, sql)
+    try:
+        with _connect_read_only(
+            config["path"],
+            allowed_tables=_allowed_tables(config),
+        ) as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}").fetchall()
+            ]
+    except sqlite3.DatabaseError as exc:
+        if "not authorized" in str(exc).lower():
+            raise DatabaseRetrievalError("query reads outside allowed_tables") from exc
+        raise
+    return {
+        "success": True,
+        "action": "explain",
+        "database_id": database_id,
+        "dialect": "sqlite",
+        "read_only": True,
+        "executed": False,
+        "sql": sql,
+        "source_dialect": validation["source_dialect"],
+        "target_dialect": validation["target_dialect"],
+        "referenced_tables": validation["referenced_tables"],
+        "referenced_columns": validation["referenced_columns"],
+        "plan": rows,
+    }
+
+
 def _redact_connection(config: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(config)
     redacted["path"] = "[workspace path]"
@@ -556,7 +591,10 @@ def database_retrieve(root: Path, arguments: dict[str, Any]) -> Observation:
                 payload = _validate_sql(config, database_id, arguments)
             elif action == "generate":
                 payload = _generate_sql(root, config, database_id, arguments)
+            elif action == "explain":
+                payload = _explain(config, database_id, arguments)
             elif action in {"query", "retrieve"}:
+                generated = None
                 if not str(arguments.get("sql", "")).strip() and str(
                     arguments.get("request") or arguments.get("user_request") or ""
                 ).strip():
@@ -564,9 +602,18 @@ def database_retrieve(root: Path, arguments: dict[str, Any]) -> Observation:
                     arguments = {**arguments, "sql": generated["sql"]}
                 payload = _query(config, database_id, arguments)
                 payload["action"] = action
+                if generated is not None:
+                    payload.update(
+                        {
+                            "generated": True,
+                            "request": generated["request"],
+                            "raw_sql": generated["raw_sql"],
+                            "generated_sql": generated["sql"],
+                        }
+                    )
             else:
                 raise DatabaseRetrievalError(
-                    "action must be one of connections, generate, healthcheck, "
+                    "action must be one of connections, explain, generate, healthcheck, "
                     "schema, validate, query, retrieve"
                 )
     except (
@@ -592,14 +639,23 @@ def database_retrieve(root: Path, arguments: dict[str, Any]) -> Observation:
 
 def validate_database_retrieve(arguments: dict[str, Any]) -> None:
     action = str(arguments.get("action", "query")).strip().lower()
-    if action not in {"connections", "generate", "healthcheck", "schema", "validate", "query", "retrieve"}:
+    if action not in {
+        "connections",
+        "explain",
+        "generate",
+        "healthcheck",
+        "schema",
+        "validate",
+        "query",
+        "retrieve",
+    }:
         raise ValueError(
-            "action must be one of connections, generate, healthcheck, schema, "
+            "action must be one of connections, explain, generate, healthcheck, schema, "
             "validate, query, retrieve"
         )
     if action != "connections" and not str(arguments.get("database_id", "")).strip():
         raise ValueError("database_id must not be empty")
-    if action in {"validate", "query"}:
+    if action in {"explain", "validate", "query"}:
         _ensure_read_only_select(
             str(arguments.get("sql", "")),
             source_dialect=arguments.get("source_dialect", DEFAULT_SOURCE_DIALECT),
@@ -625,9 +681,9 @@ def register_database_tools(registry: ToolRegistry, root: Path) -> None:
         ),
         toolset="database",
         argument_contract={
-            "action": "connections|generate|healthcheck|schema|validate|query|retrieve, default query",
+            "action": "connections|explain|generate|healthcheck|schema|validate|query|retrieve, default query",
             "database_id": "configured database id, except for action=connections",
-            "sql": "read-only SELECT or WITH query for validate/query/retrieve (optional for generate/retrieve with request)",
+            "sql": "read-only SELECT or WITH query for explain/validate/query/retrieve (optional for generate/retrieve with request)",
             "request": "natural-language retrieval request for generate or retrieve (optional)",
             "source_dialect": "SQLGlot source dialect, default postgres (optional)",
             "max_rows": "integer max returned rows, default 100, max 1000 (optional)",
