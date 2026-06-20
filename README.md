@@ -1,4 +1,4 @@
-# Autonomy - Self-Discipline/Self-Harness Agent Focus on Enterprise (In Early-stage development)
+# Autonomy - Self-Discipline/Self-Harness Agent Focus on Enterprise (In Active Early-stage development)
 
 <img src="./assets/autonomy_icon.png" alt="Autonomy" width="300">
 
