@@ -1,13 +1,2 @@
-certifi==2026.6.17
-greenlet==3.5.1
-iniconfig==2.3.0
-packaging==26.2
-playwright==1.60.0
-pluggy==1.6.0
-pyee==13.0.1
-Pygments==2.20.0
-pytest==9.0.3
-PyYAML==6.0.3
-setuptools==82.0.1
-typing_extensions==4.15.0
--e git+https://github.com/willweimike/autonomy.git@e8bf9aa92b200729da34173b6f8cd16b029d528e#egg=whole_new_agentic_system
+# Installs this checkout plus test dependencies declared in pyproject.toml.
+-e .[dev]

@@ -38,6 +38,42 @@ a runtime dependency.
 - Python 3.13+
 - Ollama or an API key for a supported OpenAI-compatible provider
 
+## Quickstart: macOS and Linux
+
+Clone the repository, create an isolated Python environment, install this
+checkout, configure a model provider, then run the TUI:
+
+```bash
+git clone https://github.com/willweimike/autonomy.git
+cd autonomy
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+autonomy --help
+autonomy model setup
+autonomy doctor
+autonomy tui
+```
+
+Use `autonomy model setup ollama` if you run Ollama locally, or choose one of
+the API providers when you have a provider key. Workspace configuration and
+secrets are written under `<workspace>/.autonomy/`.
+
+Browser tools are optional. Install Chromium only if you want website
+automation:
+
+```bash
+python -m playwright install chromium
+autonomy doctor
+```
+
+Run the test suite from the activated environment:
+
+```bash
+python -m pytest
+```
+
 ## Commands
 
 ```bash
@@ -199,10 +235,13 @@ workspace configuration file:
 The default enabled toolsets are:
 
 ```text
+assistant
+browser
 file
 terminal
 search
 skills
+memory
 ```
 
 Inspect or change toolset exposure with:
@@ -214,8 +253,8 @@ autonomy tools enable browser
 autonomy tools disable terminal
 ```
 
-The catalog includes implemented `project` and `browser` toolsets plus planned
-Hermes-like toolsets such as `memory`, `delegate`, `cronjob`, and
+The catalog includes implemented `project`, `browser`, and `memory` toolsets
+plus planned Hermes-like toolsets such as `delegate`, `cronjob`, and
 `computer_use`. Planned or unavailable tools are not exposed to the agent loop.
 Enabling a toolset only controls which implemented and available tools are
 visible to planning; it does not grant extra permissions or bypass
