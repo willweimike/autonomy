@@ -566,7 +566,7 @@ Use `memo` to manage Apple Notes.
         self.assertEqual(installed.version, "1.0.0")
         self.assertEqual(installed.tags, ("Notes", "Apple", "hermes"))
         self.assertEqual(installed.platforms, ("macos",))
-        self.assertEqual([summary.name for summary in self.library.index(set())], ["apple-notes"])
+        self.assertEqual([skill.summary.name for skill in self.library.list_all()], ["apple-notes"])
         skill_text = (self.workspace_skills / "apple-notes" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("name: apple-notes", skill_text)
         self.assertIn("# Apple Notes", skill_text)
