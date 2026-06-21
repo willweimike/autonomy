@@ -118,6 +118,11 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
         "implemented",
         ("database.retrieve",),
     ),
+    ToolsetDefinition(
+        "mcp",
+        "External Model Context Protocol tools imported from configured MCP servers.",
+        "implemented",
+    ),
     ToolsetDefinition("session_search", "Conversation history search tools."),
     ToolsetDefinition("clarify", "Clarifying question tools."),
     ToolsetDefinition("code_execution", "Programmatic code execution tools."),

@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .autonomy/
+.superpowers/
+.worktrees/
 *.db
 build/
 dist/

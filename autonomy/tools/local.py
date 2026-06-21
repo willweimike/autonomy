@@ -20,6 +20,7 @@ from .registry import ToolRegistry
 from .redaction import redact_sensitive_text
 from .toolsets.browser import BrowserController, register_browser_tools
 from .toolsets.database import register_database_tools
+from .toolsets.mcp import register_mcp_tools
 from .toolsets.process import ProcessManager, register_process_tools
 from .toolsets.project import register_project_tools
 
@@ -2726,5 +2727,7 @@ def build_local_tool_registry(
     )
     registry.register_cleanup(browser_controller.close)
     register_database_tools(registry, root)
+    if toolsets is not None and "mcp" in toolsets.enabled_set:
+        register_mcp_tools(registry, root)
     register_project_tools(registry, root)
     return registry.filter_by_toolsets(toolsets) if toolsets else registry

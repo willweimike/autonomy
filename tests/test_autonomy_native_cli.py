@@ -331,6 +331,85 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertIn('"model_configured": false', output.getvalue())
         self.assertIn('"tool_config_valid": true', output.getvalue())
 
+    def test_session_shell_tools_status_does_not_connect_mcp_without_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / ".autonomy").mkdir()
+            (workspace / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            inputs = iter(["/tools status", "/exit"])
+            shell = SessionShell(
+                workspace=workspace,
+                db_path=workspace / "chat.db",
+                max_steps=3,
+                config_dir=workspace / "config",
+                tool_config_dir=workspace / ".autonomy",
+                input_func=lambda prompt: next(inputs),
+                output=output,
+                agent_loop_factory=lambda workspace, db_path: FakeAgentLoop(),
+                responder=TaskResponder(),
+            )
+
+            with patch("autonomy.tools.toolsets.mcp.connect_mcp_server") as connect:
+                result = shell.run()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(connect.call_count, 0)
+        self.assertIn('"name": "mcp"', output.getvalue())
+
+    def test_doctor_does_not_connect_mcp_without_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            config_dir = workspace / "config"
+            (workspace / ".autonomy").mkdir()
+            (workspace / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("autonomy.cli.default_model_config_dir", return_value=config_dir),
+                patch("autonomy.cli.default_toolset_config_dir", return_value=workspace / ".autonomy"),
+                patch("autonomy.tools.toolsets.mcp.connect_mcp_server") as connect,
+                patch("autonomy.cli.Path.cwd", return_value=workspace),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                result = main(["--db", str(workspace / "doctor.db"), "doctor"])
+
+        self.assertEqual(result, 1)
+        self.assertEqual(connect.call_count, 0)
+        self.assertIn('"tool_config_valid": true', output.getvalue())
+
+    def test_main_tools_status_does_not_connect_mcp_without_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            config_dir = workspace / "config"
+            (workspace / ".autonomy").mkdir()
+            (workspace / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("autonomy.cli.default_model_config_dir", return_value=config_dir),
+                patch("autonomy.cli.default_toolset_config_dir", return_value=workspace / ".autonomy"),
+                patch("autonomy.tools.toolsets.mcp.connect_mcp_server") as connect,
+                patch("autonomy.cli.Path.cwd", return_value=workspace),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                result = main(["tools", "status"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(connect.call_count, 0)
+        self.assertIn('"name": "mcp"', output.getvalue())
+
     def test_session_shell_inspects_run_and_handles_exit(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "chat.db"

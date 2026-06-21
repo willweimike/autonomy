@@ -1185,6 +1185,501 @@ def run_task():
 
         self.assertEqual(set(memory_toolset.tools), implemented_memory_tools)
 
+    def test_mcp_helpers_load_config_sanitize_names_and_normalize_schema(self):
+        from autonomy.tools.toolsets.mcp import (
+            load_mcp_servers,
+            mcp_tool_name,
+            normalize_mcp_input_schema,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  my-api:\n"
+                "    command: npx\n"
+                "    args: ['-y', '@example/server']\n"
+                "    tools:\n"
+                "      include: [query.data]\n",
+                encoding="utf-8",
+            )
+
+            servers = load_mcp_servers(root)
+
+        self.assertEqual(servers["my-api"]["command"], "npx")
+        self.assertEqual(mcp_tool_name("my-api", "query.data"), "mcp_my_api_query_data")
+
+        schema = normalize_mcp_input_schema(
+            {
+                "type": "object",
+                "properties": {"payload": {"$ref": "#/definitions/Payload"}},
+                "required": ["payload", "missing"],
+                "definitions": {
+                    "Payload": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                        "required": ["q", "ghost"],
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(schema["required"], ["payload"])
+        self.assertIn("$defs", schema)
+        self.assertNotIn("definitions", schema)
+        self.assertEqual(schema["properties"]["payload"]["$ref"], "#/$defs/Payload")
+        self.assertEqual(schema["$defs"]["Payload"]["required"], ["q"])
+
+    def test_mcp_helpers_filter_env_validate_url_and_redact_errors(self):
+        from autonomy.tools.toolsets.mcp import (
+            build_mcp_env,
+            sanitize_mcp_error,
+            validate_mcp_http_url,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "PATH": "/bin",
+                "HOME": "/tmp/home",
+                "OPENAI_API_KEY": "sk-secret",
+                "XDG_CACHE_HOME": "/tmp/cache",
+            },
+            clear=True,
+        ):
+            env = build_mcp_env({"GITHUB_TOKEN": "ghp_custom"})
+
+        self.assertEqual(env["PATH"], "/bin")
+        self.assertEqual(env["HOME"], "/tmp/home")
+        self.assertEqual(env["GITHUB_TOKEN"], "ghp_custom")
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertNotIn("XDG_CACHE_HOME", env)
+        self.assertEqual(validate_mcp_http_url("remote", "https://example.test/mcp"), "https://example.test/mcp")
+        with self.assertRaisesRegex(ValueError, "scheme must be http or https"):
+            validate_mcp_http_url("remote", "file:///tmp/socket")
+        self.assertNotIn("github_pat_1234567890abcdef", sanitize_mcp_error("Authorization: Bearer github_pat_1234567890abcdef"))
+        self.assertEqual(sanitize_mcp_error(0), "0")
+
+    def test_mcp_toolset_registers_discovered_tools_with_filters(self):
+        from autonomy.models import Observation
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        class FakeSession:
+            def __init__(self):
+                self.closed = False
+
+            def list_tools(self):
+                return [
+                    {
+                        "name": "read-file",
+                        "description": "Read a file",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                    {
+                        "name": "write_file",
+                        "description": "Write a file",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    },
+                ]
+
+            def call_tool(self, tool_name, arguments, timeout):
+                return {"tool": tool_name, "arguments": arguments, "timeout": timeout}
+
+            def close(self):
+                self.closed = True
+
+        fake_session = FakeSession()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs-server:\n"
+                "    command: fake-mcp\n"
+                "    timeout: 7\n"
+                "    tools:\n"
+                "      include: [read-file]\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(mcp_toolset, "connect_mcp_server", return_value=fake_session):
+                registry = build_local_tool_registry(
+                    root,
+                    ToolsetConfiguration(enabled_toolsets=("mcp",)),
+                )
+
+            self.assertEqual(registry.names, {"mcp_fs_server_read_file"})
+            spec = registry.spec("mcp_fs_server_read_file")
+            self.assertEqual(spec.toolset, "mcp")
+            self.assertEqual(spec.default_risk, RiskLevel.MEDIUM)
+            self.assertEqual(spec.argument_contract["path"], "string")
+            result = registry.execute(
+                Action(
+                    "mcp_fs_server_read_file",
+                    {"path": "README.md"},
+                    "read via mcp",
+                    "verify",
+                )
+            )
+            registry.close()
+
+        self.assertTrue(result.succeeded, result.error)
+        self.assertIn('"tool": "read-file"', result.output)
+        self.assertTrue(fake_session.closed)
+
+    def test_mcp_toolset_is_not_registered_when_disabled(self):
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(mcp_toolset, "connect_mcp_server") as connect:
+                registry = build_local_tool_registry(root, ToolsetConfiguration())
+
+        self.assertNotIn("mcp", {registry.spec(name).toolset for name in registry.names})
+        self.assertEqual(connect.call_count, 0)
+
+    def test_mcp_toolset_is_not_registered_without_explicit_toolset_configuration(self):
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(mcp_toolset, "connect_mcp_server") as connect:
+                registry = build_local_tool_registry(root)
+
+        self.assertNotIn("mcp", {registry.spec(name).toolset for name in registry.names})
+        self.assertEqual(connect.call_count, 0)
+
+    def test_mcp_toolset_closes_open_sessions_when_later_discovery_fails(self):
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        class FakeSession:
+            def __init__(self, tools=None, error=None):
+                self._tools = tools or []
+                self._error = error
+                self.closed = False
+
+            def list_tools(self):
+                if self._error:
+                    raise self._error
+                return list(self._tools)
+
+            def close(self):
+                self.closed = True
+
+        first = FakeSession(
+            tools=[
+                {
+                    "name": "read-file",
+                    "description": "Read a file",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+            ]
+        )
+        second = FakeSession(error=RuntimeError("boom"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  first:\n"
+                "    command: fake-mcp\n"
+                "  second:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(mcp_toolset, "connect_mcp_server", side_effect=[first, second]),
+                self.assertRaisesRegex(RuntimeError, "boom"),
+            ):
+                build_local_tool_registry(
+                    root,
+                    ToolsetConfiguration(enabled_toolsets=("mcp",)),
+                )
+
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+
+    def test_mcp_missing_sdk_does_not_crash_registry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+
+            registry = build_local_tool_registry(
+                root,
+                ToolsetConfiguration(enabled_toolsets=("mcp",)),
+            )
+
+        self.assertEqual(registry.names, set())
+
+    def test_mcp_tool_handler_redacts_errors(self):
+        from autonomy.tools.toolsets.mcp import McpServerSession, _make_mcp_handler
+
+        class FailingClient:
+            def call_tool(self, tool_name, arguments, timeout):
+                raise RuntimeError("bad token=sk-secret")
+
+        session = McpServerSession("github", {}, FailingClient())
+        observation = _make_mcp_handler(session, "create_issue", 1)({})
+
+        self.assertFalse(observation.succeeded)
+        self.assertNotIn("sk-secret", observation.error)
+        self.assertIn("[REDACTED]", observation.error)
+
+    def test_mcp_sdk_client_wraps_async_session(self):
+        from autonomy.tools.toolsets.mcp import McpSdkClient
+
+        class FakeToolResult:
+            content = [type("Block", (), {"text": "hello"})()]
+            isError = False
+
+        class FakeToolsResult:
+            tools = [
+                {
+                    "name": "echo",
+                    "description": "Echo",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+            ]
+
+        class FakeSession:
+            async def list_tools(self):
+                return FakeToolsResult()
+
+            async def call_tool(self, tool_name, arguments):
+                self.last_call = (tool_name, arguments)
+                return FakeToolResult()
+
+        client = McpSdkClient("fake", FakeSession(), close_callback=lambda: None)
+        try:
+            self.assertEqual(client.list_tools()[0]["name"], "echo")
+            self.assertEqual(client.call_tool("echo", {"text": "hi"}, timeout=1), "hello")
+        finally:
+            client.close()
+
+    def test_mcp_sdk_client_list_tools_handles_dict_response(self):
+        from autonomy.tools.toolsets.mcp import McpSdkClient
+
+        class FakeSession:
+            async def list_tools(self):
+                return {
+                    "tools": [
+                        {
+                            "name": "echo",
+                            "description": "Echo",
+                            "inputSchema": {"type": "object", "properties": {}},
+                        }
+                    ]
+                }
+
+            async def call_tool(self, tool_name, arguments):
+                raise AssertionError("call_tool should not be called")
+
+        client = McpSdkClient("fake", FakeSession(), close_callback=lambda: None)
+        try:
+            self.assertEqual(client.list_tools()[0]["name"], "echo")
+        finally:
+            client.close()
+
+    def test_mcp_result_to_output_raises_for_dict_error_result(self):
+        from autonomy.tools.toolsets.mcp import _mcp_result_to_output
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            _mcp_result_to_output({"isError": True, "content": [{"text": "boom"}]})
+
+    def test_connect_with_mcp_sdk_closes_entered_resources_on_initialize_failure(self):
+        import types
+
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        events: list[str] = []
+
+        class FakeAsyncContextManager:
+            def __init__(self, label, value):
+                self.label = label
+                self.value = value
+
+            async def __aenter__(self):
+                events.append(f"enter:{self.label}")
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append(f"exit:{self.label}")
+                return False
+
+        class FakeClientSessionContext:
+            def __init__(self, read_stream, write_stream):
+                self.read_stream = read_stream
+                self.write_stream = write_stream
+
+            async def __aenter__(self):
+                events.append("enter:session")
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("exit:session")
+                return False
+
+            async def initialize(self):
+                events.append("initialize")
+                raise RuntimeError("initialize failed")
+
+        def fake_stdio_client(params):
+            events.append(f"stdio:{params.command}")
+            return FakeAsyncContextManager("transport", ("reader", "writer"))
+
+        fake_mcp_module = types.ModuleType("mcp")
+        fake_mcp_stdio_module = types.ModuleType("mcp.client.stdio")
+        fake_mcp_client_module = types.ModuleType("mcp.client")
+
+        class FakeServerParameters:
+            def __init__(self, command, args, env):
+                self.command = command
+                self.args = args
+                self.env = env
+
+        fake_mcp_module.ClientSession = FakeClientSessionContext
+        fake_mcp_module.StdioServerParameters = FakeServerParameters
+        fake_mcp_stdio_module.stdio_client = fake_stdio_client
+        fake_mcp_client_module.stdio = fake_mcp_stdio_module
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mcp": fake_mcp_module,
+                "mcp.client": fake_mcp_client_module,
+                "mcp.client.stdio": fake_mcp_stdio_module,
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "initialize failed"):
+                mcp_toolset._connect_with_mcp_sdk("fake", {"command": "fake-mcp"})
+
+        self.assertEqual(
+            events,
+            [
+                "stdio:fake-mcp",
+                "enter:transport",
+                "enter:session",
+                "initialize",
+                "exit:session",
+                "exit:transport",
+            ],
+        )
+
+    def test_connect_with_mcp_sdk_closes_entered_resources_on_timeout(self):
+        import concurrent.futures
+        import types
+
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        events: list[str] = []
+
+        class FakeAsyncContextManager:
+            def __init__(self, label, value):
+                self.label = label
+                self.value = value
+
+            async def __aenter__(self):
+                events.append(f"enter:{self.label}")
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append(f"exit:{self.label}")
+                return False
+
+        class FakeClientSessionContext:
+            def __init__(self, read_stream, write_stream):
+                self.read_stream = read_stream
+                self.write_stream = write_stream
+
+            async def __aenter__(self):
+                events.append("enter:session")
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("exit:session")
+                return False
+
+            async def initialize(self):
+                import asyncio
+
+                events.append("initialize")
+                await asyncio.Event().wait()
+
+        def fake_stdio_client(params):
+            events.append(f"stdio:{params.command}")
+            return FakeAsyncContextManager("transport", ("reader", "writer"))
+
+        fake_mcp_module = types.ModuleType("mcp")
+        fake_mcp_stdio_module = types.ModuleType("mcp.client.stdio")
+        fake_mcp_client_module = types.ModuleType("mcp.client")
+
+        class FakeServerParameters:
+            def __init__(self, command, args, env):
+                self.command = command
+                self.args = args
+                self.env = env
+
+        fake_mcp_module.ClientSession = FakeClientSessionContext
+        fake_mcp_module.StdioServerParameters = FakeServerParameters
+        fake_mcp_stdio_module.stdio_client = fake_stdio_client
+        fake_mcp_client_module.stdio = fake_mcp_stdio_module
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mcp": fake_mcp_module,
+                "mcp.client": fake_mcp_client_module,
+                "mcp.client.stdio": fake_mcp_stdio_module,
+            },
+        ):
+            with self.assertRaises(concurrent.futures.TimeoutError):
+                mcp_toolset._connect_with_mcp_sdk(
+                    "fake",
+                    {"command": "fake-mcp", "connect_timeout": 0.01},
+                )
+
+        self.assertEqual(
+            events,
+            [
+                "stdio:fake-mcp",
+                "enter:transport",
+                "enter:session",
+                "initialize",
+                "exit:session",
+                "exit:transport",
+            ],
+        )
+
     def test_database_retrieve_reads_sqlite_schema_and_rejects_mutations(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

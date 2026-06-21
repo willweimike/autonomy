@@ -364,11 +364,12 @@ class SessionShell:
         store = ToolsetConfigStore(self.tool_config_dir)
         try:
             if not arguments or arguments[0] in {"list", "status"}:
-                registry = build_local_tool_registry(self.workspace)
+                configuration = store.load()
+                registry = build_local_tool_registry(self.workspace, configuration)
                 self._write(
                     json.dumps(
                         toolset_catalog_status(
-                            store.load(),
+                            configuration,
                             registry.tool_statuses(),
                         ),
                         indent=2,
@@ -720,13 +721,9 @@ def doctor(
     except ToolsetConfigurationError as exc:
         toolset_configuration = None
         toolset_error = str(exc)
-    full_registry = build_local_tool_registry(workspace)
-    registry = (
-        full_registry.filter_by_toolsets(toolset_configuration)
-        if toolset_configuration
-        else full_registry
-    )
-    tool_statuses = full_registry.tool_statuses()
+    registry_configuration = toolset_configuration or ToolsetConfiguration()
+    registry = build_local_tool_registry(workspace, registry_configuration)
+    tool_statuses = registry.tool_statuses()
     checks = {
         "python_3_13_or_newer": sys.version_info >= (3, 13),
         "database_writable": database_writable,
@@ -918,11 +915,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tools":
         try:
             if args.tools_command in {"list", "status"}:
-                registry = build_local_tool_registry(workspace)
+                configuration = toolset_store.load()
+                registry = build_local_tool_registry(workspace, configuration)
                 print(
                     json.dumps(
                         toolset_catalog_status(
-                            toolset_store.load(),
+                            configuration,
                             registry.tool_statuses(),
                         ),
                         indent=2,
