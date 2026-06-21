@@ -109,6 +109,7 @@ def sanitize_mcp_error(text: object) -> str:
     if text is None:
         return ""
     redacted, _ = redact_sensitive_text(str(text))
+    redacted = re.sub(r"\bBearer\s+\S+", "Bearer [REDACTED]", redacted, flags=re.IGNORECASE)
     return redacted.replace("***", "[REDACTED]")
 
 
@@ -385,6 +386,42 @@ def _make_mcp_handler(session: Any, tool_name: str, timeout: float):
     return handler
 
 
+def _configured_mcp_tool_names(policy: object) -> list[str]:
+    if isinstance(policy, dict):
+        include = policy.get("include")
+        if isinstance(include, str):
+            include = [include]
+        if isinstance(include, list):
+            names = [str(item).strip() for item in include if str(item).strip()]
+            if names:
+                return names
+    return ["unavailable"]
+
+
+def _register_unavailable_mcp_tools(
+    registry: ToolRegistry,
+    server_name: str,
+    config: dict[str, Any],
+    error: object,
+) -> None:
+    reason = sanitize_mcp_error(error)
+
+    def unavailable(arguments: dict[str, Any]) -> Observation:
+        del arguments
+        return Observation("", False, error=reason, evidence=(f"mcp:{server_name}:unavailable",))
+
+    for native_name in _configured_mcp_tool_names(config.get("tools")):
+        registry.register(
+            mcp_tool_name(server_name, native_name),
+            unavailable,
+            description=f"MCP tool {native_name} from {server_name} is unavailable",
+            toolset="mcp",
+            default_risk=RiskLevel.MEDIUM,
+            side_effects=("external-mcp",),
+            availability_check=lambda reason=reason: (False, reason),
+        )
+
+
 def register_mcp_tools(registry: ToolRegistry, root: Path) -> None:
     servers = load_mcp_servers(root)
     sessions: list[McpServerSession] = []
@@ -394,13 +431,23 @@ def register_mcp_tools(registry: ToolRegistry, root: Path) -> None:
                 continue
             try:
                 session = connect_mcp_server(server_name, config)
-            except Exception:
+            except Exception as exc:
+                _register_unavailable_mcp_tools(registry, server_name, config, exc)
+                continue
+            try:
+                tools = session.list_tools()
+            except Exception as exc:
+                _register_unavailable_mcp_tools(registry, server_name, config, exc)
+                try:
+                    session.close()
+                except Exception:
+                    pass
                 continue
             sessions.append(session)
             registry.register_cleanup(session.close)
             timeout = float(config.get("timeout", DEFAULT_MCP_TIMEOUT))
             tools_policy = config.get("tools")
-            for tool in session.list_tools():
+            for tool in tools:
                 native_name = str(_tool_attr(tool, "name", "")).strip()
                 if not native_name or not _tool_allowed(native_name, tools_policy):
                     continue

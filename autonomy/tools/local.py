@@ -886,6 +886,8 @@ def _memory_store(root: Path) -> AutonomyStore:
 def build_local_tool_registry(
     workspace: str | Path,
     toolsets: ToolsetConfiguration | None = None,
+    *,
+    require_available: bool = True,
 ) -> ToolRegistry:
     from . import browser_tools_available
 
@@ -2730,4 +2732,4 @@ def build_local_tool_registry(
     if toolsets is not None and "mcp" in toolsets.enabled_set:
         register_mcp_tools(registry, root)
     register_project_tools(registry, root)
-    return registry.filter_by_toolsets(toolsets) if toolsets else registry
+    return registry.filter_by_toolsets(toolsets, require_available=require_available) if toolsets else registry

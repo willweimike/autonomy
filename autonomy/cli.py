@@ -365,17 +365,24 @@ class SessionShell:
         try:
             if not arguments or arguments[0] in {"list", "status"}:
                 configuration = store.load()
-                registry = build_local_tool_registry(self.workspace, configuration)
-                self._write(
-                    json.dumps(
-                        toolset_catalog_status(
-                            configuration,
-                            registry.tool_statuses(),
-                        ),
-                        indent=2,
-                        sort_keys=True,
-                    )
+                registry = build_local_tool_registry(
+                    self.workspace,
+                    configuration,
+                    require_available=False,
                 )
+                try:
+                    self._write(
+                        json.dumps(
+                            toolset_catalog_status(
+                                configuration,
+                                registry.tool_statuses(),
+                            ),
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                finally:
+                    registry.close()
                 return
             if arguments[0] == "enable" and len(arguments) == 2:
                 self._write(json.dumps(store.enable(arguments[1]).as_document(), indent=2, sort_keys=True))
@@ -722,39 +729,46 @@ def doctor(
         toolset_configuration = None
         toolset_error = str(exc)
     registry_configuration = toolset_configuration or ToolsetConfiguration()
-    registry = build_local_tool_registry(workspace, registry_configuration)
-    tool_statuses = registry.tool_statuses()
-    checks = {
-        "python_3_13_or_newer": sys.version_info >= (3, 13),
-        "database_writable": database_writable,
-        "database_error": database_error,
-        "skill_store_path": str(skill_store_path),
-        "skill_store_writable": skill_store_writable,
-        "candidate_store_path": str(candidate_store_path),
-        "candidate_store_writable": candidate_store_writable,
-        "model_configured": False,
-        "configuration_valid": False,
-        "configuration_source": "workspace",
-        "autonomy_home": str(autonomy_home),
-        "provider": "",
-        "model": "",
-        "endpoint": "",
-        "credentials_configured": False,
-        "env_permissions_secure": env_permissions_secure,
-        "model_endpoint_reachable": False,
-        "model_available": False,
-        "model_error": "",
-        "tool_config_path": str(toolset_store.config_path),
-        "tool_config_valid": toolset_configuration is not None,
-        "tool_config_error": toolset_error,
-        "enabled_toolsets": sorted(toolset_configuration.enabled_toolsets) if toolset_configuration else [],
-        "toolsets": toolset_catalog_status(
-            toolset_configuration,
-            tool_statuses,
-        ) if toolset_configuration else [],
-        "web_readiness": _web_readiness(toolset_configuration, tool_statuses),
-        "tools": sorted(registry.names),
-    }
+    registry = build_local_tool_registry(
+        workspace,
+        registry_configuration,
+        require_available=False,
+    )
+    try:
+        tool_statuses = registry.tool_statuses()
+        checks = {
+            "python_3_13_or_newer": sys.version_info >= (3, 13),
+            "database_writable": database_writable,
+            "database_error": database_error,
+            "skill_store_path": str(skill_store_path),
+            "skill_store_writable": skill_store_writable,
+            "candidate_store_path": str(candidate_store_path),
+            "candidate_store_writable": candidate_store_writable,
+            "model_configured": False,
+            "configuration_valid": False,
+            "configuration_source": "workspace",
+            "autonomy_home": str(autonomy_home),
+            "provider": "",
+            "model": "",
+            "endpoint": "",
+            "credentials_configured": False,
+            "env_permissions_secure": env_permissions_secure,
+            "model_endpoint_reachable": False,
+            "model_available": False,
+            "model_error": "",
+            "tool_config_path": str(toolset_store.config_path),
+            "tool_config_valid": toolset_configuration is not None,
+            "tool_config_error": toolset_error,
+            "enabled_toolsets": sorted(toolset_configuration.enabled_toolsets) if toolset_configuration else [],
+            "toolsets": toolset_catalog_status(
+                toolset_configuration,
+                tool_statuses,
+            ) if toolset_configuration else [],
+            "web_readiness": _web_readiness(toolset_configuration, tool_statuses),
+            "tools": sorted(registry.names),
+        }
+    finally:
+        registry.close()
     try:
         configuration = config_store.load()
         checks.update(
@@ -916,17 +930,24 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.tools_command in {"list", "status"}:
                 configuration = toolset_store.load()
-                registry = build_local_tool_registry(workspace, configuration)
-                print(
-                    json.dumps(
-                        toolset_catalog_status(
-                            configuration,
-                            registry.tool_statuses(),
-                        ),
-                        indent=2,
-                        sort_keys=True,
-                    )
+                registry = build_local_tool_registry(
+                    workspace,
+                    configuration,
+                    require_available=False,
                 )
+                try:
+                    print(
+                        json.dumps(
+                            toolset_catalog_status(
+                                configuration,
+                                registry.tool_statuses(),
+                            ),
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                finally:
+                    registry.close()
             elif args.tools_command == "enable":
                 print(
                     json.dumps(

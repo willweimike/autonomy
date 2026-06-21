@@ -272,12 +272,13 @@ Inspect or change toolset exposure with:
 autonomy tools status
 autonomy tools enable project
 autonomy tools enable database
+autonomy tools enable mcp
 autonomy tools enable browser
 autonomy tools disable terminal
 ```
 
-The catalog includes implemented `project`, `browser`, `memory`, and
-`database` toolsets plus planned Hermes-like toolsets such as `delegate`,
+The catalog includes implemented `project`, `browser`, `memory`, `database`,
+and `mcp` toolsets plus planned Hermes-like toolsets such as `delegate`,
 `cronjob`, and `computer_use`. Planned or unavailable tools are not exposed to
 the agent loop.
 Enabling a toolset only controls which implemented and available tools are
@@ -309,6 +310,33 @@ a natural-language request before validation. Use `action: explain` to inspect a
 SQLite query plan before running a complex query. SQLite paths are
 workspace-bounded and executable; other dialects support configured schema,
 validation, transpilation, and generation until a connector is added.
+
+To import external MCP tools, install the optional SDK and enable the `mcp`
+toolset:
+
+```bash
+python3.13 -m pip install -e ".[mcp]"
+autonomy tools enable mcp
+```
+
+Then add servers to `<workspace>/.autonomy/mcp_servers.yaml`:
+
+```yaml
+servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    tools:
+      include: ["read_file"]
+  remote:
+    url: "https://example.test/mcp"
+```
+
+Discovered tools are exposed as `mcp_<server>_<tool>` through the normal
+`ToolRegistry` and `ActionGateway` path, with `MEDIUM` risk and
+`external-mcp` side effects. This imports MCP tools only; Autonomy does not
+act as an MCP server and does not implement OAuth, resources, prompts, sampling,
+hot reload, SSE, or dynamic `tools/list_changed`.
 
 Tool implementation code is grouped under `autonomy/tools/`:
 

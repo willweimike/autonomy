@@ -20,7 +20,7 @@ from autonomy import (
     RunResult,
     TerminationReason,
 )
-from autonomy.toolsets import ToolsetConfigStore
+from autonomy.toolsets import ToolsetConfigStore, ToolsetConfiguration
 
 
 class FakeProvider:
@@ -409,6 +409,52 @@ class AutonomyNativeCliTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(connect.call_count, 0)
         self.assertIn('"name": "mcp"', output.getvalue())
+
+    def test_main_tools_status_reports_enabled_mcp_tools_and_closes_session(self):
+        class FakeSession:
+            name = "fs"
+
+            def __init__(self):
+                self.closed = False
+
+            def list_tools(self):
+                return [
+                    {
+                        "name": "read",
+                        "description": "Read via MCP",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    }
+                ]
+
+            def close(self):
+                self.closed = True
+
+        fake_session = FakeSession()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            config_dir = workspace / "config"
+            (workspace / ".autonomy").mkdir()
+            ToolsetConfigStore(workspace / ".autonomy").save(
+                ToolsetConfiguration(enabled_toolsets=("mcp",))
+            )
+            (workspace / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("autonomy.cli.default_model_config_dir", return_value=config_dir),
+                patch("autonomy.cli.default_toolset_config_dir", return_value=workspace / ".autonomy"),
+                patch("autonomy.tools.toolsets.mcp.connect_mcp_server", return_value=fake_session),
+                patch("autonomy.cli.Path.cwd", return_value=workspace),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                result = main(["tools", "status"])
+
+        self.assertEqual(result, 0)
+        self.assertIn('"mcp_fs_read"', output.getvalue())
+        self.assertTrue(fake_session.closed)
 
     def test_session_shell_inspects_run_and_handles_exit(self):
         with tempfile.TemporaryDirectory() as tmpdir:

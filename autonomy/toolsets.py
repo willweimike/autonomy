@@ -272,7 +272,15 @@ def toolset_catalog_status(
     rows: list[dict] = []
     for definition in TOOLSET_CATALOG:
         implemented = definition.status == "implemented"
-        visible_tools = tuple(tool for tool in definition.tools if tool not in disabled_tools)
+        dynamic_tools = tuple(
+            sorted(
+                tool
+                for tool, status in tool_statuses.items()
+                if status.get("toolset") == definition.name and tool not in definition.tools
+            )
+        )
+        catalog_tools = (*definition.tools, *dynamic_tools)
+        visible_tools = tuple(tool for tool in catalog_tools if tool not in disabled_tools)
         available_tools = tuple(
             tool
             for tool in visible_tools
@@ -295,7 +303,7 @@ def toolset_catalog_status(
                 "status": definition.status,
                 "implemented": implemented,
                 "enabled": definition.name in enabled,
-                "tools": list(definition.tools),
+                "tools": list(catalog_tools),
                 "available_tools": list(available_tools) if implemented and definition.name in enabled else [],
                 "unavailable_tools": unavailable_tools if implemented else [],
             }

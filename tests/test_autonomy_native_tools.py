@@ -1185,6 +1185,23 @@ def run_task():
 
         self.assertEqual(set(memory_toolset.tools), implemented_memory_tools)
 
+    def test_toolset_catalog_status_includes_dynamic_mcp_tools(self):
+        registry = ToolRegistry()
+        registry.register(
+            "mcp_weather_forecast",
+            lambda arguments: None,
+            toolset="mcp",
+        )
+
+        rows = toolset_catalog_status(
+            ToolsetConfiguration(enabled_toolsets=("mcp",)),
+            registry.tool_statuses(),
+        )
+
+        mcp_row = next(row for row in rows if row["name"] == "mcp")
+        self.assertEqual(mcp_row["tools"], ["mcp_weather_forecast"])
+        self.assertEqual(mcp_row["available_tools"], ["mcp_weather_forecast"])
+
     def test_mcp_helpers_load_config_sanitize_names_and_normalize_schema(self):
         from autonomy.tools.toolsets.mcp import (
             load_mcp_servers,
@@ -1411,17 +1428,18 @@ def run_task():
                 encoding="utf-8",
             )
 
-            with (
-                patch.object(mcp_toolset, "connect_mcp_server", side_effect=[first, second]),
-                self.assertRaisesRegex(RuntimeError, "boom"),
-            ):
-                build_local_tool_registry(
+            with patch.object(mcp_toolset, "connect_mcp_server", side_effect=[first, second]):
+                registry = build_local_tool_registry(
                     root,
                     ToolsetConfiguration(enabled_toolsets=("mcp",)),
+                    require_available=False,
                 )
 
-        self.assertTrue(first.closed)
+        self.assertEqual(registry.names, {"mcp_first_read_file", "mcp_second_unavailable"})
+        self.assertFalse(first.closed)
         self.assertTrue(second.closed)
+        registry.close()
+        self.assertTrue(first.closed)
 
     def test_mcp_missing_sdk_does_not_crash_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1440,6 +1458,93 @@ def run_task():
             )
 
         self.assertEqual(registry.names, set())
+
+    def test_mcp_connect_failure_reports_configured_tools_unavailable_for_status(self):
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n"
+                "    tools:\n"
+                "      include: [read-file]\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                mcp_toolset,
+                "connect_mcp_server",
+                side_effect=RuntimeError("failed with Bearer sk-secret"),
+            ):
+                runtime_registry = build_local_tool_registry(
+                    root,
+                    ToolsetConfiguration(enabled_toolsets=("mcp",)),
+                )
+                status_registry = build_local_tool_registry(
+                    root,
+                    ToolsetConfiguration(enabled_toolsets=("mcp",)),
+                    require_available=False,
+                )
+
+        self.assertEqual(runtime_registry.names, set())
+        self.assertEqual(status_registry.names, {"mcp_fs_read_file"})
+        available, reason = status_registry.spec("mcp_fs_read_file").availability
+        self.assertFalse(available)
+        self.assertIn("failed with", reason)
+        self.assertNotIn("sk-secret", reason)
+        rows = toolset_catalog_status(
+            ToolsetConfiguration(enabled_toolsets=("mcp",)),
+            status_registry.tool_statuses(),
+        )
+        mcp_row = next(row for row in rows if row["name"] == "mcp")
+        self.assertEqual(mcp_row["available_tools"], [])
+        self.assertEqual(mcp_row["unavailable_tools"][0]["tool"], "mcp_fs_read_file")
+
+    def test_mcp_list_tools_failure_reports_server_unavailable_for_status(self):
+        from autonomy.tools.toolsets import mcp as mcp_toolset
+
+        class FakeSession:
+            def __init__(self):
+                self.closed = False
+
+            def list_tools(self):
+                raise RuntimeError("list failed")
+
+            def close(self):
+                self.closed = True
+
+        session = FakeSession()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".autonomy").mkdir()
+            (root / ".autonomy" / "mcp_servers.yaml").write_text(
+                "servers:\n"
+                "  fs:\n"
+                "    command: fake-mcp\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(mcp_toolset, "connect_mcp_server", return_value=session):
+                status_registry = build_local_tool_registry(
+                    root,
+                    ToolsetConfiguration(enabled_toolsets=("mcp",)),
+                    require_available=False,
+                )
+
+        self.assertEqual(status_registry.names, {"mcp_fs_unavailable"})
+        available, reason = status_registry.spec("mcp_fs_unavailable").availability
+        self.assertFalse(available)
+        self.assertEqual(reason, "list failed")
+        self.assertTrue(session.closed)
+        rows = toolset_catalog_status(
+            ToolsetConfiguration(enabled_toolsets=("mcp",)),
+            status_registry.tool_statuses(),
+        )
+        mcp_row = next(row for row in rows if row["name"] == "mcp")
+        self.assertEqual(mcp_row["unavailable_tools"][0]["tool"], "mcp_fs_unavailable")
 
     def test_mcp_tool_handler_redacts_errors(self):
         from autonomy.tools.toolsets.mcp import McpServerSession, _make_mcp_handler
