@@ -1,5 +1,7 @@
+import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,6 +46,14 @@ requires_tools: [{tools}]
 """,
         encoding="utf-8",
     )
+
+
+def skill_archive(files: dict[str, str]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
 
 
 class AutonomyNativeProcedureSkillTest(unittest.TestCase):
@@ -350,6 +360,236 @@ class AutonomyNativeProcedureSkillTest(unittest.TestCase):
         )
         with self.assertRaises(FileExistsError):
             self.library.install_bundled(["code-editing"])
+
+    def test_install_clawhub_downloads_skill_and_enables_by_default(self):
+        class FakeResponse:
+            headers = {"X-ClawHub-Digest": "sha256:test"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                del amount
+                return skill_archive(
+                    {
+                        "demo/SKILL.md": """---
+name: claw-demo
+description: ClawHub demo
+version: 1.2.3
+tags: [clawhub]
+platforms: [macos, linux, windows]
+requires_tools: [filesystem.read]
+---
+
+# Demo
+
+Use the downloaded skill.
+""",
+                        "demo/references/note.md": "supporting file",
+                    }
+                )
+
+        requests = []
+
+        def fake_urlopen(request, timeout, context=None):
+            requests.append((request.full_url, timeout, context is not None))
+            return FakeResponse()
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            installed = self.library.install_clawhub("@openclaw/demo")
+
+        self.assertEqual(installed.name, "claw-demo")
+        self.assertTrue(installed.enabled)
+        self.assertEqual([summary.name for summary in self.library.index(self.tools)], ["claw-demo"])
+        self.assertTrue((self.workspace_skills / "claw-demo" / "SKILL.md").is_file())
+        self.assertEqual(
+            (self.workspace_skills / "claw-demo" / "references" / "note.md").read_text(encoding="utf-8"),
+            "supporting file",
+        )
+        self.assertEqual(
+            requests,
+            [("https://clawhub.ai/api/v1/download?slug=openclaw%2Fdemo", 30, True)],
+        )
+        records = {
+            record["name"]: record
+            for record in self.store.list_procedure_skill_records()
+        }
+        self.assertEqual(records["claw-demo"]["enabled"], 1)
+
+    def test_install_clawhub_rejects_unsafe_archive_paths(self):
+        class FakeResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                del amount
+                return skill_archive({"../SKILL.md": "bad"})
+
+        with (
+            patch("urllib.request.urlopen", return_value=FakeResponse()),
+            self.assertRaisesRegex(ProcedureSkillError, "unsafe archive path"),
+        ):
+            self.library.install_clawhub("openclaw/bad")
+
+    def test_install_clawhub_rejects_large_downloads_before_parsing(self):
+        class FakeResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                return b"x" * amount
+
+        with (
+            patch.object(ProcedureSkillLibrary, "MAX_SKILL_DOWNLOAD_BYTES", 32, create=True),
+            patch("urllib.request.urlopen", return_value=FakeResponse()),
+            self.assertRaisesRegex(ProcedureSkillError, "download exceeds"),
+        ):
+            self.library.install_clawhub("openclaw/large")
+
+    def test_install_clawhub_rejects_large_archive_contents(self):
+        class FakeResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                return skill_archive(
+                    {
+                        "SKILL.md": """---
+name: small-skill
+description: Small skill
+version: 1.0.0
+tags: []
+platforms: []
+requires_tools: []
+---
+
+# Small
+""",
+                        "large.txt": "x" * 64,
+                    }
+                )
+
+        with (
+            patch.object(ProcedureSkillLibrary, "MAX_SKILL_ARCHIVE_BYTES", 32, create=True),
+            patch("urllib.request.urlopen", return_value=FakeResponse()),
+            self.assertRaisesRegex(ProcedureSkillError, "archive contents exceed"),
+        ):
+            self.library.install_clawhub("openclaw/large")
+
+    def test_clawhub_skill_page_url_resolves_to_slug(self):
+        self.assertEqual(
+            ProcedureSkillLibrary._clawhub_slug("https://clawhub.ai/skills/gocreative-llm"),
+            "gocreative-llm",
+        )
+
+    def test_install_hermes_downloads_skill_and_enables_by_default(self):
+        catalog = b"""[
+          {
+            "name": "apple-notes",
+            "description": "Manage Apple Notes",
+            "source": "built-in",
+            "docsPath": "bundled/apple/apple-apple-notes",
+            "tags": ["Notes", "Apple"],
+            "category": "apple"
+          }
+        ]"""
+        raw_markdown = b"""---
+title: Apple Notes
+---
+
+# Apple Notes
+
+Docs intro.
+
+## Skill metadata
+
+| | |
+|---|---|
+| Version | `1.0.0` |
+| Platforms | macos |
+
+## Reference: full SKILL.md
+
+:::info
+The following is the complete skill definition.
+:::
+
+# Apple Notes
+
+Use `memo` to manage Apple Notes.
+"""
+        responses = [catalog, raw_markdown]
+        requests = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                del amount
+                return self.payload
+
+        def fake_urlopen(request, timeout, context=None):
+            requests.append((request.full_url, timeout, context is not None))
+            return FakeResponse(responses.pop(0))
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            installed = self.library.install_hermes("apple-notes")
+
+        self.assertEqual(installed.name, "apple-notes")
+        self.assertTrue(installed.enabled)
+        self.assertEqual(installed.description, "Manage Apple Notes")
+        self.assertEqual(installed.version, "1.0.0")
+        self.assertEqual(installed.tags, ("Notes", "Apple", "hermes"))
+        self.assertEqual(installed.platforms, ("macos",))
+        self.assertEqual([summary.name for summary in self.library.index(set())], ["apple-notes"])
+        skill_text = (self.workspace_skills / "apple-notes" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("name: apple-notes", skill_text)
+        self.assertIn("# Apple Notes", skill_text)
+        self.assertNotIn("Skill metadata", skill_text)
+        self.assertEqual(
+            requests,
+            [
+                ("https://hermes-agent.nousresearch.com/docs/api/skills.json", 30, True),
+                (
+                    "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/docs/user-guide/skills/bundled/apple/apple-apple-notes.md",
+                    30,
+                    True,
+                ),
+            ],
+        )
+
+    def test_hermes_skill_page_url_resolves_to_docs_path(self):
+        self.assertEqual(
+            ProcedureSkillLibrary._hermes_spec(
+                "https://hermes-agent.nousresearch.com/docs/user-guide/skills/bundled/apple/apple-apple-notes"
+            ),
+            "bundled/apple/apple-apple-notes",
+        )
 
     def test_install_bundled_all_includes_software_engineering_skill_pack(self):
         installed = self.library.install_bundled()

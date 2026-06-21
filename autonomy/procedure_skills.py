@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import shutil
+import ssl
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
+import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
+import certifi
 
 from .bundled_procedure_skills import BUNDLED_PROCEDURE_SKILLS
 from .models import ProcedureSkill, ProcedureSkillDraft, ProcedureSkillSummary
@@ -25,6 +32,17 @@ class ProcedureSkillLibrary:
     """Discover governed SKILL.md procedure knowledge with progressive disclosure."""
 
     NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
+    CLAWHUB_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)?$")
+    CLAWHUB_BASE_URL = "https://clawhub.ai"
+    CLAWHUB_TIMEOUT = 30
+    HERMES_BASE_URL = "https://hermes-agent.nousresearch.com"
+    HERMES_RAW_BASE_URL = (
+        "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/"
+        "website/docs/user-guide/skills"
+    )
+    MAX_SKILL_DOWNLOAD_BYTES = 5_000_000
+    MAX_HERMES_CATALOG_BYTES = 64_000_000
+    MAX_SKILL_ARCHIVE_BYTES = 5_000_000
     MAX_CONTENT_CHARS = 50_000
 
     def __init__(
@@ -118,6 +136,112 @@ class ProcedureSkillLibrary:
             installed.append(approved.summary)
         self._invalidate_formal_cache()
         return installed
+
+    def install_clawhub(
+        self,
+        spec: str,
+        *,
+        base_url: str = CLAWHUB_BASE_URL,
+    ) -> ProcedureSkillSummary:
+        slug = self._clawhub_slug(spec)
+        download_url = self._clawhub_download_url(base_url, slug)
+        request = urllib.request.Request(
+            download_url,
+            headers={"User-Agent": "autonomy-skill-installer"},
+        )
+        archive_bytes = self._read_https_bytes(request, "ClawHub download")
+
+        files = self._clawhub_archive_files(archive_bytes)
+        skill_text = files.get("SKILL.md")
+        if skill_text is None:
+            raise ProcedureSkillError("ClawHub archive must contain SKILL.md")
+        skill = self._parse_content(
+            skill_text.decode("utf-8"),
+            source="workspace",
+            path=self.skills_dir / "SKILL.md",
+        )
+        destination_dir = self.skills_dir / skill.summary.name
+        if destination_dir.exists():
+            raise FileExistsError(f"procedure skill already exists: {destination_dir / 'SKILL.md'}")
+        destination_dir.mkdir(parents=True, exist_ok=False)
+        for relative_path, content in files.items():
+            destination = (destination_dir / relative_path).resolve()
+            if destination_dir.resolve() not in destination.parents:
+                raise ProcedureSkillError(f"unsafe archive path: {relative_path}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+        approved = self._read_skill(destination_dir / "SKILL.md", self.skills_dir, "workspace")
+        self.store.sync_procedure_skill(approved.summary)
+        self._invalidate_formal_cache()
+        return approved.summary
+
+    def install_hermes(
+        self,
+        spec: str,
+        *,
+        base_url: str = HERMES_BASE_URL,
+    ) -> ProcedureSkillSummary:
+        wanted = self._hermes_spec(spec)
+        catalog_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "docs/api/skills.json")
+        catalog = json.loads(
+            self._read_https_bytes(
+                urllib.request.Request(catalog_url, headers={"User-Agent": "autonomy-skill-installer"}),
+                "Hermes skills catalog",
+                max_bytes=self.MAX_HERMES_CATALOG_BYTES,
+            ).decode("utf-8")
+        )
+        if not isinstance(catalog, list):
+            raise ProcedureSkillError("Hermes skills catalog must be a list")
+        match = next(
+            (
+                item
+                for item in catalog
+                if isinstance(item, dict)
+                and wanted in {str(item.get("name", "")), str(item.get("docsPath", ""))}
+            ),
+            None,
+        )
+        if match is None:
+            raise ProcedureSkillError(f"unknown Hermes skill: {spec}")
+
+        docs_path = str(match.get("docsPath", "")).strip("/")
+        raw_url = f"{self.HERMES_RAW_BASE_URL}/{docs_path}.md"
+        raw_markdown = self._read_https_bytes(
+            urllib.request.Request(raw_url, headers={"User-Agent": "autonomy-skill-installer"}),
+            "Hermes skill download",
+        ).decode("utf-8")
+        body = self._hermes_skill_body(raw_markdown)
+        version = self._hermes_metadata_value(raw_markdown, "Version") or "0.1.0"
+        platforms_text = self._hermes_metadata_value(raw_markdown, "Platforms")
+        platforms = tuple(
+            item.strip()
+            for item in re.split(r"[,/ ]+", platforms_text or "")
+            if item.strip()
+        ) or ProcedureSkillDraft.platforms
+        tags = tuple(str(item).strip() for item in match.get("tags", []) if str(item).strip())
+        if "hermes" not in {tag.lower() for tag in tags}:
+            tags = (*tags, "hermes")
+        content = self.render_draft(
+            ProcedureSkillDraft(
+                name=str(match.get("name", "")).strip(),
+                description=str(match.get("description", "")).strip() or str(match.get("name", "")).strip(),
+                version=version,
+                tags=tags,
+                platforms=platforms,
+                requires_tools=(),
+                body=body,
+            )
+        )
+        skill = self._parse_content(content, source="workspace", path=self.skills_dir / "SKILL.md")
+        destination = self.skills_dir / skill.summary.name / "SKILL.md"
+        if destination.exists():
+            raise FileExistsError(f"procedure skill already exists: {destination}")
+        destination.parent.mkdir(parents=True, exist_ok=False)
+        destination.write_text(content, encoding="utf-8")
+        approved = self._read_skill(destination, self.skills_dir, "workspace")
+        self.store.sync_procedure_skill(approved.summary)
+        self._invalidate_formal_cache()
+        return approved.summary
 
     def write_candidate(
         self,
@@ -368,6 +492,136 @@ class ProcedureSkillLibrary:
         if not source.is_file():
             raise KeyError(f"unknown procedure skill candidate: {candidate_id}")
         return source
+
+    @classmethod
+    def _read_https_bytes(
+        cls,
+        request: urllib.request.Request,
+        label: str,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        limit = max_bytes or cls.MAX_SKILL_DOWNLOAD_BYTES
+        try:
+            context = ssl.create_default_context(cafile=certifi.where())
+            with urllib.request.urlopen(
+                request,
+                timeout=cls.CLAWHUB_TIMEOUT,
+                context=context,
+            ) as response:
+                payload = response.read(limit + 1)
+            if len(payload) > limit:
+                raise ProcedureSkillError(f"{label} failed: download exceeds {limit} bytes")
+            return payload
+        except ProcedureSkillError:
+            raise
+        except urllib.error.HTTPError as exc:
+            detail = exc.read(4096).decode("utf-8", errors="replace").strip()
+            suffix = f": {detail}" if detail else ""
+            raise ProcedureSkillError(f"{label} failed: HTTP {exc.code}{suffix}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ProcedureSkillError(f"{label} failed: {exc}") from exc
+
+    @classmethod
+    def _clawhub_slug(cls, spec: str) -> str:
+        text = str(spec or "").strip()
+        parsed = urllib.parse.urlparse(text)
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme != "https" or parsed.netloc != "clawhub.ai":
+                raise ProcedureSkillError("ClawHub skill URL must be on https://clawhub.ai")
+            text = parsed.path.strip("/")
+            for prefix in ("skills/", "skill/"):
+                if text.startswith(prefix):
+                    text = text[len(prefix):]
+                    break
+        if text.startswith("@"):
+            text = text[1:]
+        if not cls.CLAWHUB_SLUG_RE.fullmatch(text):
+            raise ProcedureSkillError("invalid ClawHub skill spec")
+        return text
+
+    @classmethod
+    def _clawhub_download_url(cls, base_url: str, slug: str) -> str:
+        parsed = urllib.parse.urlparse(str(base_url).rstrip("/"))
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ProcedureSkillError("ClawHub base URL must be absolute https")
+        query = urllib.parse.urlencode({"slug": slug})
+        return urllib.parse.urlunparse(
+            (parsed.scheme, parsed.netloc, "/api/v1/download", "", query, "")
+        )
+
+    @classmethod
+    def _clawhub_archive_files(cls, archive_bytes: bytes) -> dict[str, bytes]:
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+        except zipfile.BadZipFile as exc:
+            raise ProcedureSkillError("ClawHub download is not a valid ZIP archive") from exc
+        with archive:
+            raw_files: dict[str, bytes] = {}
+            skill_roots: set[PurePosixPath] = set()
+            total_size = 0
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                path = PurePosixPath(member.filename)
+                if path.is_absolute() or ".." in path.parts:
+                    raise ProcedureSkillError(f"unsafe archive path: {member.filename}")
+                total_size += member.file_size
+                if total_size > cls.MAX_SKILL_ARCHIVE_BYTES:
+                    raise ProcedureSkillError(
+                        f"ClawHub archive contents exceed {cls.MAX_SKILL_ARCHIVE_BYTES} bytes"
+                    )
+                raw_files[str(path)] = archive.read(member)
+                if path.name == "SKILL.md":
+                    skill_roots.add(path.parent)
+            if len(skill_roots) != 1:
+                raise ProcedureSkillError("ClawHub archive must contain exactly one SKILL.md")
+            root = next(iter(skill_roots))
+            files: dict[str, bytes] = {}
+            for name, content in raw_files.items():
+                path = PurePosixPath(name)
+                if root != PurePosixPath("."):
+                    if root not in (path, *path.parents):
+                        continue
+                    path = path.relative_to(root)
+                if str(path) == ".":
+                    continue
+                files[str(path)] = content
+            return files
+
+    @classmethod
+    def _hermes_spec(cls, spec: str) -> str:
+        text = str(spec or "").strip()
+        parsed = urllib.parse.urlparse(text)
+        if parsed.scheme or parsed.netloc:
+            if parsed.scheme != "https" or parsed.netloc != "hermes-agent.nousresearch.com":
+                raise ProcedureSkillError("Hermes skill URL must be on https://hermes-agent.nousresearch.com")
+            prefix = "/docs/user-guide/skills/"
+            if not parsed.path.startswith(prefix):
+                raise ProcedureSkillError("Hermes skill URL must point under /docs/user-guide/skills/")
+            text = parsed.path[len(prefix):].strip("/")
+        if not text:
+            raise ProcedureSkillError("invalid Hermes skill spec")
+        return text
+
+    @staticmethod
+    def _hermes_skill_body(markdown: str) -> str:
+        marker = "## Reference: full SKILL.md"
+        if marker not in markdown:
+            raise ProcedureSkillError("Hermes skill markdown is missing full SKILL.md reference")
+        body = markdown.split(marker, 1)[1].strip()
+        body = re.sub(r"^:::info\n.*?\n:::\n", "", body, count=1, flags=re.DOTALL).strip()
+        if not body:
+            raise ProcedureSkillError("Hermes full SKILL.md reference is empty")
+        return body
+
+    @staticmethod
+    def _hermes_metadata_value(markdown: str, name: str) -> str:
+        match = re.search(rf"^\|\s*{re.escape(name)}\s*\|\s*(.*?)\s*\|$", markdown, re.MULTILINE)
+        if not match:
+            return ""
+        value = re.sub(r"`([^`]*)`", r"\1", match.group(1))
+        return re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value).strip()
 
     def _candidate_metadata(self, candidate_id: str) -> dict[str, str]:
         metadata_path = self.candidates_dir / candidate_id / "candidate.json"

@@ -318,6 +318,12 @@ class SessionShell:
             elif arguments[0] == "install-bundled":
                 installed = library.install_bundled(arguments[1:] or None)
                 self._write(json.dumps(jsonable(installed), indent=2, sort_keys=True))
+            elif arguments[0] == "install-clawhub" and len(arguments) == 2:
+                installed = library.install_clawhub(arguments[1])
+                self._write(json.dumps(jsonable(installed), indent=2, sort_keys=True))
+            elif arguments[0] == "install-hermes" and len(arguments) == 2:
+                installed = library.install_hermes(arguments[1])
+                self._write(json.dumps(jsonable(installed), indent=2, sort_keys=True))
             elif arguments[0] == "view-candidate" and len(arguments) == 2:
                 self._write(library.view_candidate(arguments[1]).raw_content)
             elif arguments[0] == "approve" and len(arguments) == 2:
@@ -327,7 +333,7 @@ class SessionShell:
                 self._write(json.dumps(library.reject_candidate(arguments[1]), indent=2, sort_keys=True))
             else:
                 self._write(
-                    "usage: /skills [candidates|install-bundled [SKILL_NAME...]|view-candidate CANDIDATE_ID|approve CANDIDATE_ID|reject CANDIDATE_ID]"
+                    "usage: /skills [candidates|install-bundled [SKILL_NAME...]|install-clawhub SPEC|install-hermes SPEC|view-candidate CANDIDATE_ID|approve CANDIDATE_ID|reject CANDIDATE_ID]"
                 )
         except (KeyError, FileExistsError, ProcedureSkillError, ToolsetConfigurationError) as exc:
             self._write(f"skill error: {exc}")
@@ -546,6 +552,10 @@ def build_parser() -> argparse.ArgumentParser:
     skills_sub.add_parser("candidates")
     install_bundled = skills_sub.add_parser("install-bundled")
     install_bundled.add_argument("skill_names", nargs="*")
+    install_clawhub = skills_sub.add_parser("install-clawhub")
+    install_clawhub.add_argument("skill_spec")
+    install_hermes = skills_sub.add_parser("install-hermes")
+    install_hermes.add_argument("skill_spec")
     view_candidate = skills_sub.add_parser("view-candidate")
     view_candidate.add_argument("candidate_id")
     approve = skills_sub.add_parser("approve")
@@ -912,6 +922,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(library.list_candidates(), indent=2, sort_keys=True))
             elif args.skills_command == "install-bundled":
                 installed = library.install_bundled(args.skill_names or None)
+                print(json.dumps(jsonable(installed), indent=2, sort_keys=True))
+            elif args.skills_command == "install-clawhub":
+                installed = library.install_clawhub(args.skill_spec)
+                print(json.dumps(jsonable(installed), indent=2, sort_keys=True))
+            elif args.skills_command == "install-hermes":
+                installed = library.install_hermes(args.skill_spec)
                 print(json.dumps(jsonable(installed), indent=2, sort_keys=True))
             elif args.skills_command == "view-candidate":
                 print(library.view_candidate(args.candidate_id).raw_content)

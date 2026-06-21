@@ -116,6 +116,8 @@ python3.13 -m autonomy recipes activate RECIPE_ID
 python3.13 -m autonomy recipes disable RECIPE_ID
 python3.13 -m autonomy skills list
 python3.13 -m autonomy skills install-bundled code-editing process-management systematic-debugging test-driven-development technical-spike api-debugging codebase-documentation requesting-code-review plan writing-plans procedure-skill-authoring browser-navigation website-inspection email-himalaya database-retrieval
+python3.13 -m autonomy skills install-clawhub SKILL_SLUG
+python3.13 -m autonomy skills install-hermes SKILL_NAME_OR_DOC_URL
 python3.13 -m autonomy skills view test-diagnosis
 python3.13 -m autonomy skills candidates
 python3.13 -m autonomy skills view-candidate CANDIDATE_ID
@@ -572,6 +574,27 @@ autonomy skills install-bundled code-editing process-management systematic-debug
 
 These skills require the corresponding enabled and available tools before they
 are considered by the agent loop.
+
+Public ClawHub skills can also be installed into the same workspace store:
+
+```bash
+autonomy skills install-clawhub SKILL_SLUG
+```
+
+The installer downloads from `https://clawhub.ai/api/v1/download`, validates
+the archive contains one `SKILL.md`, rejects unsafe archive paths, and installs
+the skill enabled by default.
+
+Hermes Agent skill docs can be installed from the public Skills Hub too:
+
+```bash
+autonomy skills install-hermes apple-notes
+autonomy skills install-hermes https://hermes-agent.nousresearch.com/docs/user-guide/skills/bundled/apple/apple-apple-notes
+```
+
+The installer uses `https://hermes-agent.nousresearch.com/docs/api/skills.json`
+to resolve the skill, pulls the generated source markdown, extracts the
+`Reference: full SKILL.md` section, and installs the skill enabled by default.
 
 During candidate generation, the model receives the enabled and available tool
 specs from the live `ToolRegistry`, including descriptions, argument contracts,

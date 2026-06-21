@@ -2,6 +2,7 @@ import io
 import json
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -40,6 +41,14 @@ class FakeProvider:
         self.validate_calls += 1
         if self.error:
             raise self.error
+
+
+def skill_archive(files: dict[str, str]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
 
 
 class FakeAgentLoop:
@@ -1187,6 +1196,121 @@ requires_tools: [filesystem.read]
                     / "SKILL.md"
                 ).is_file()
             )
+
+    def test_skills_cli_installs_clawhub_skill_enabled_by_default(self):
+        class FakeResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                del amount
+                return skill_archive(
+                    {
+                        "SKILL.md": """---
+name: claw-cli
+description: ClawHub CLI install
+version: 1.0.0
+tags: [clawhub]
+platforms: [macos, linux, windows]
+requires_tools: [filesystem.read]
+---
+
+# CLI
+
+Use it.
+"""
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            db_path = Path(tmpdir) / "skills.db"
+            with (
+                patch("urllib.request.urlopen", return_value=FakeResponse()),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                result = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "skills",
+                        "--workspace",
+                        str(workspace),
+                        "install-clawhub",
+                        "@openclaw/demo",
+                    ]
+                )
+
+            installed = json.loads(output.getvalue())
+            self.assertEqual(result, 0)
+            self.assertEqual(installed["name"], "claw-cli")
+            self.assertTrue(installed["enabled"])
+            self.assertTrue((workspace / ".autonomy" / "skills" / "claw-cli" / "SKILL.md").is_file())
+
+    def test_skills_cli_installs_hermes_skill_enabled_by_default(self):
+        payloads = [
+            b"""[{"name": "apple-notes", "description": "Apple Notes", "docsPath": "bundled/apple/apple-apple-notes"}]""",
+            b"""---
+title: Apple Notes
+---
+
+## Reference: full SKILL.md
+
+# Apple Notes
+
+Use notes.
+""",
+        ]
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, amount=-1):
+                del amount
+                return self.payload
+
+        def fake_urlopen(request, timeout, context=None):
+            del request, timeout, context
+            return FakeResponse(payloads.pop(0))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            db_path = Path(tmpdir) / "skills.db"
+            with (
+                patch("urllib.request.urlopen", side_effect=fake_urlopen),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                result = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "skills",
+                        "--workspace",
+                        str(workspace),
+                        "install-hermes",
+                        "apple-notes",
+                    ]
+                )
+
+            installed = json.loads(output.getvalue())
+            self.assertEqual(result, 0)
+            self.assertEqual(installed["name"], "apple-notes")
+            self.assertTrue(installed["enabled"])
+            self.assertTrue((workspace / ".autonomy" / "skills" / "apple-notes" / "SKILL.md").is_file())
 
     def test_curator_cli_is_not_exposed(self):
         with self.assertRaises(SystemExit):
