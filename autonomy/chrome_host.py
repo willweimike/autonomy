@@ -10,10 +10,6 @@ from typing import Any, BinaryIO, Mapping, Protocol
 MAX_NATIVE_MESSAGE_BYTES = 1_000_000
 
 _REQUEST_TYPES = {
-    "approval.respond",
-    "chat.send",
-    "run.inspect",
-    "session.start",
     "status",
 }
 

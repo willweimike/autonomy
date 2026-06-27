@@ -36,6 +36,50 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
         with self.assertRaisesRegex(ChromeHostError, "exceeds"):
             read_native_message(io.BytesIO(framed({"type": "status"})), max_bytes=2)
 
+    def test_native_message_rejects_missing_type(self):
+        from autonomy.chrome_host import ChromeHostError, read_native_message
+
+        with self.assertRaisesRegex(ChromeHostError, "missing type"):
+            read_native_message(io.BytesIO(framed({"status": "ok"})))
+
+    def test_native_message_rejects_unknown_type(self):
+        from autonomy.chrome_host import ChromeHostError, read_native_message
+
+        with self.assertRaisesRegex(ChromeHostError, "unknown type"):
+            read_native_message(io.BytesIO(framed({"type": "session.start"})))
+
+    def test_native_message_rejects_malformed_json(self):
+        from autonomy.chrome_host import ChromeHostError, read_native_message
+
+        body = b"{not json"
+        incoming = io.BytesIO(struct.pack("<I", len(body)) + body)
+
+        with self.assertRaisesRegex(ChromeHostError, "invalid native message payload"):
+            read_native_message(incoming)
+
+    def test_native_message_rejects_invalid_utf8(self):
+        from autonomy.chrome_host import ChromeHostError, read_native_message
+
+        body = b"\xff"
+        incoming = io.BytesIO(struct.pack("<I", len(body)) + body)
+
+        with self.assertRaisesRegex(ChromeHostError, "invalid native message payload"):
+            read_native_message(incoming)
+
+    def test_native_message_rejects_truncated_header(self):
+        from autonomy.chrome_host import ChromeHostError, read_native_message
+
+        with self.assertRaisesRegex(ChromeHostError, "invalid native message header"):
+            read_native_message(io.BytesIO(b"\x01\x00"))
+
+    def test_native_message_rejects_truncated_body(self):
+        from autonomy.chrome_host import ChromeHostError, read_native_message
+
+        incoming = io.BytesIO(struct.pack("<I", 4) + b"abc")
+
+        with self.assertRaisesRegex(ChromeHostError, "truncated native message"):
+            read_native_message(incoming)
+
     def test_chrome_host_parser_and_main_delegate_to_host(self):
         args = build_parser().parse_args(["chrome-host"])
         self.assertEqual(args.command, "chrome-host")
