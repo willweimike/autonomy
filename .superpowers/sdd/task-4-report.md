@@ -8,3 +8,6 @@ Follow-up fix for review findings:
 - Added compact inspect controls to `chrome-extension/sidepanel.html` (`run-id` input and `Inspect` button).
 - Wired `chrome-extension/sidepanel.js` to remember the last `run_id` from `chat.result` and send `run.inspect` with an explicit or last-known `run_id`.
 - Strengthened `tests/test_chrome_extension_static.py` to assert the inspect controls exist and the JS posts `run.inspect` with a `run_id` payload.
+
+Verification-gap follow-up:
+- Tightened `tests/test_chrome_extension_static.py` to source-match the `inspect-run` click handler binding and assert that its body contains `send({`, `type: "run.inspect"`, and `run_id`, which structurally proves the visible control reaches the message send path.

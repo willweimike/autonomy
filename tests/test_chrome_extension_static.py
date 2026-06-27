@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -37,7 +38,16 @@ class ChromeExtensionStaticTest(unittest.TestCase):
         self.assertIn('id="inspect-run"', html)
         self.assertIn('id="approval-modal"', html)
         self.assertRegex(sidepanel, r"lastRunId\s*=\s*message\.run_id")
-        self.assertRegex(sidepanel, r'send\(\{\s*type:\s*"run\.inspect",\s*run_id\s*\}\);')
+        match = re.search(
+            r'document\.getElementById\("inspect-run"\)\.addEventListener\("click",\s*\(\)\s*=>\s*\{(?P<body>.*?)\n\}\);',
+            sidepanel,
+            re.S,
+        )
+        self.assertIsNotNone(match)
+        body = match.group("body")
+        self.assertIn("send({", body)
+        self.assertIn('type: "run.inspect"', body)
+        self.assertIn("run_id", body)
 
     def test_native_host_example_restricts_extension_origin(self):
         manifest = json.loads((EXTENSION / "native-host.example.json").read_text(encoding="utf-8"))
