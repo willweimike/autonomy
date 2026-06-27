@@ -82,6 +82,12 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
         with self.assertRaisesRegex(ChromeHostError, "exceeds"):
             read_native_message(io.BytesIO(framed({"type": "status"})), max_bytes=2)
 
+    def test_write_native_message_rejects_oversized_payload(self):
+        from autonomy.chrome_host import ChromeHostError, write_native_message
+
+        with self.assertRaisesRegex(ChromeHostError, "exceeds"):
+            write_native_message(io.BytesIO(), {"ok": True, "body": "x" * 1_000_000})
+
     def test_native_message_rejects_missing_type(self):
         from autonomy.chrome_host import ChromeHostError, read_native_message
 
@@ -249,6 +255,46 @@ class FakeStore:
         return {"run_id": run_id, "events": [{"event_type": "run_started"}]}
 
 
+class BlockingConversation:
+    def __init__(
+        self,
+        *,
+        workspace,
+        db_path,
+        max_steps,
+        agent_loop_factory,
+        responder,
+        store=None,
+        session_id=None,
+        interface="tui",
+    ):
+        del workspace, db_path, max_steps, agent_loop_factory, responder, store, session_id, interface
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def handle_user_input(self, text):
+        self.entered.set()
+        self.release.wait(timeout=1.0)
+        run_result = RunResult(
+            run_id=f"run-{text}",
+            goal=text,
+            termination=TerminationReason.ACHIEVED,
+            reason="done",
+            steps_executed=1,
+        )
+        return ConversationResponse(
+            session_id="blocking-session",
+            user_turn_id="user-blocking",
+            assistant_turn_id="assistant-blocking",
+            run_result=run_result,
+            reply="reply text",
+            conversation_context="",
+            candidate_skills=(),
+            action_recipe_candidates=(),
+            decision=None,
+        )
+
+
 class ApprovalConversation:
     def __init__(
         self,
@@ -351,6 +397,47 @@ class AutonomyNativeChromeApiTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["type"], "run.inspect.result")
         self.assertEqual(result["run"]["run_id"], "run-1")
+
+    def test_chrome_api_rejects_concurrent_chat_send_for_same_session(self):
+        from autonomy.chrome_api import ChromeSessionBridge
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            bridge = ChromeSessionBridge(
+                conversation_factory=BlockingConversation,
+                store_factory=FakeStore,
+            )
+            started = bridge.handle({"type": "session.start", "workspace": str(workspace)})
+            session_id = started["session_id"]
+            conversation = bridge.sessions[session_id]
+            results: list[dict[str, object]] = []
+
+            worker = threading.Thread(
+                target=lambda: results.append(
+                    bridge.handle(
+                        {
+                            "type": "chat.send",
+                            "session_id": session_id,
+                            "text": "first",
+                        }
+                    )
+                )
+            )
+            worker.start()
+            self.assertTrue(conversation.entered.wait(timeout=1.0))
+
+            busy = bridge.handle(
+                {
+                    "type": "chat.send",
+                    "session_id": session_id,
+                    "text": "second",
+                }
+            )
+            conversation.release.set()
+            worker.join(timeout=1.0)
+
+        self.assertEqual(busy, {"ok": False, "error": "session is busy"})
+        self.assertEqual(results[0]["type"], "chat.result")
 
 
 class AutonomyNativeChromeApprovalTest(unittest.TestCase):
@@ -523,3 +610,17 @@ class AutonomyNativeChromeApprovalTest(unittest.TestCase):
         self.assertEqual(chat_result["type"], "chat.result")
         self.assertEqual(chat_result["reason"], "deny")
         self.assertLess(time.monotonic() - start, 1.0)
+
+
+class ChromeExtensionPackagingTest(unittest.TestCase):
+    def test_pyproject_registers_dedicated_chrome_host_console_script(self):
+        pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+
+        self.assertIn('autonomy-chrome-host = "autonomy.chrome_host:main"', pyproject)
+
+    def test_native_host_example_points_to_chrome_host_console_script(self):
+        manifest = json.loads(
+            Path("chrome-extension/native-host.example.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(manifest["path"], "/absolute/path/to/autonomy-chrome-host")

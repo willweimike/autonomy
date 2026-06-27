@@ -1,25 +1,30 @@
 let nativePort = null;
-const panelPorts = new Set();
+let panelPort = null;
 
 function connectNative() {
   if (nativePort) return nativePort;
   nativePort = chrome.runtime.connectNative("com.autonomy.app");
   nativePort.onMessage.addListener((message) => {
-    for (const port of panelPorts) port.postMessage(message);
+    if (panelPort) panelPort.postMessage(message);
   });
   nativePort.onDisconnect.addListener(() => {
     nativePort = null;
-    for (const port of panelPorts) {
-      port.postMessage({ ok: false, error: "Autonomy native host disconnected" });
-    }
+    if (panelPort) panelPort.postMessage({ ok: false, error: "Autonomy native host disconnected" });
   });
   return nativePort;
 }
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "autonomy-panel") return;
-  panelPorts.add(port);
-  port.onDisconnect.addListener(() => panelPorts.delete(port));
+  if (panelPort && panelPort !== port) {
+    port.postMessage({ ok: false, error: "Another Autonomy panel is already connected" });
+    port.disconnect();
+    return;
+  }
+  panelPort = port;
+  port.onDisconnect.addListener(() => {
+    if (panelPort === port) panelPort = null;
+  });
   port.onMessage.addListener((message) => {
     const type = message && message.type;
     if (

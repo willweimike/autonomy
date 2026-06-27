@@ -29,7 +29,10 @@ port.onMessage.addListener((message) => {
     return;
   }
   if (message.type === "status.result") {
-    append("system", `status: ${JSON.stringify(message)}`);
+    append(
+      "system",
+      `status: host connected; active sessions=${message.sessions}. This is host/session count only, not model/tool status.`,
+    );
   } else if (message.type === "session.started") {
     sessionId = message.session_id;
     append("system", `session: ${sessionId}`);

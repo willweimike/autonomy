@@ -48,6 +48,8 @@ class ChromeExtensionStaticTest(unittest.TestCase):
         self.assertIn("send({", body)
         self.assertIn('type: "run.inspect"', body)
         self.assertIn("run_id", body)
+        self.assertIn("active sessions", sidepanel)
+        self.assertIn("not model/tool status", sidepanel)
 
     def test_native_host_example_restricts_extension_origin(self):
         manifest = json.loads((EXTENSION / "native-host.example.json").read_text(encoding="utf-8"))
@@ -55,3 +57,11 @@ class ChromeExtensionStaticTest(unittest.TestCase):
         self.assertEqual(manifest["name"], "com.autonomy.app")
         self.assertEqual(manifest["type"], "stdio")
         self.assertEqual(manifest["allowed_origins"], ["chrome-extension://EXTENSION_ID/"])
+        self.assertEqual(manifest["path"], "/absolute/path/to/autonomy-chrome-host")
+
+    def test_service_worker_rejects_second_panel_connection(self):
+        service_worker = (EXTENSION / "service_worker.js").read_text(encoding="utf-8")
+
+        self.assertIn("let panelPort = null", service_worker)
+        self.assertIn("Another Autonomy panel is already connected", service_worker)
+        self.assertIn("port.disconnect()", service_worker)

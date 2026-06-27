@@ -29,7 +29,8 @@ def test_workspace_runtime_state_is_gitignored():
 def test_readme_documents_chrome_extension_native_host():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "autonomy chrome-host" in text
+    assert "autonomy-chrome-host" in text
     assert "chrome-extension" in text
     assert "native-host.example.json" in text
     assert "com.autonomy.app" in text
+    assert "host/session count only" in text

@@ -137,10 +137,11 @@ messaging host, and the host routes requests into:
 ConversationLoop(interface="chrome") -> AgentLoop -> ActionGateway -> ToolRegistry
 ```
 
-Host command:
+Host commands:
 
 ```bash
 autonomy chrome-host
+autonomy-chrome-host
 ```
 
 Development setup:
@@ -149,7 +150,7 @@ Development setup:
 2. Load `chrome-extension/` as an unpacked extension in Chrome.
 3. Copy `chrome-extension/native-host.example.json` to Chrome's native messaging host directory.
 4. Replace `EXTENSION_ID` with the unpacked extension ID.
-5. Replace `path` with the absolute path to the `autonomy` executable from your environment.
+5. Replace `path` with the absolute path to the `autonomy-chrome-host` executable from your environment.
 
 Native host name:
 
@@ -160,6 +161,7 @@ com.autonomy.app
 The native host manifest restricts access to the configured extension origin.
 The extension never receives provider API keys or `.autonomy/.env` content.
 Approval prompts default to deny on timeout or disconnect.
+The panel `status` action currently reports host/session count only; it does not expose model/tool status.
 
 ## Interactive Session
 

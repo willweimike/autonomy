@@ -11,6 +11,7 @@ mcp = ["mcp>=1.27,<2"]
 
 [project.scripts]
 autonomy = "autonomy.cli:main"
+autonomy-chrome-host = "autonomy.chrome_host:main"
 
 [tool.setuptools.packages.find]
 include = ["autonomy*"]

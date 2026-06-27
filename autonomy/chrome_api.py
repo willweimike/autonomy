@@ -103,6 +103,8 @@ class ChromeSessionBridge:
         self.events: list[dict[str, Any]] = []
         self.event_sink: Callable[[dict[str, Any]], None] | None = None
         self.approval_broker = ChromeApprovalBroker(self._send_event)
+        self._busy_sessions: set[str] = set()
+        self._busy_lock = threading.Lock()
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         request_type = str(message.get("type") or "")
@@ -165,20 +167,28 @@ class ChromeSessionBridge:
         text = str(message.get("text") or "").strip()
         if not text:
             return {"ok": False, "error": "text must not be empty"}
-        response = conversation.handle_user_input(text)
-        run = response.run_result
-        if run is None:
-            return {"ok": False, "error": "missing run result"}
-        return {
-            "ok": True,
-            "type": "chat.result",
-            "session_id": session_id,
-            "reply": response.reply,
-            "run_id": run.run_id,
-            "termination": run.termination.value,
-            "steps_executed": run.steps_executed,
-            "reason": run.reason,
-        }
+        with self._busy_lock:
+            if session_id in self._busy_sessions:
+                return {"ok": False, "error": "session is busy"}
+            self._busy_sessions.add(session_id)
+        try:
+            response = conversation.handle_user_input(text)
+            run = response.run_result
+            if run is None:
+                return {"ok": False, "error": "missing run result"}
+            return {
+                "ok": True,
+                "type": "chat.result",
+                "session_id": session_id,
+                "reply": response.reply,
+                "run_id": run.run_id,
+                "termination": run.termination.value,
+                "steps_executed": run.steps_executed,
+                "reason": run.reason,
+            }
+        finally:
+            with self._busy_lock:
+                self._busy_sessions.discard(session_id)
 
     def _run_inspect(self, message: dict[str, Any]) -> dict[str, Any]:
         run_id = str(message.get("run_id") or "").strip()

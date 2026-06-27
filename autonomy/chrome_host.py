@@ -69,6 +69,8 @@ def read_native_message(
 
 def write_native_message(stream: BinaryIO, payload: Mapping[str, Any]) -> None:
     body = json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+    if len(body) > MAX_NATIVE_MESSAGE_BYTES:
+        raise ChromeHostError(f"native message exceeds {MAX_NATIVE_MESSAGE_BYTES} bytes")
     stream.write(struct.pack("<I", len(body)))
     stream.write(body)
     stream.flush()
@@ -90,6 +92,15 @@ def run_chrome_host(
         api.set_event_sink(writer.send)
     workers: list[threading.Thread] = []
 
+    def prune_finished_workers() -> None:
+        alive_workers = []
+        for worker in workers:
+            if worker.is_alive():
+                alive_workers.append(worker)
+                continue
+            worker.join()
+        workers[:] = alive_workers
+
     def handle_in_worker(message: dict[str, Any]) -> None:
         try:
             writer.send(api.handle(message))
@@ -97,6 +108,7 @@ def run_chrome_host(
             writer.send({"ok": False, "error": str(exc)})
 
     while True:
+        prune_finished_workers()
         try:
             message = read_native_message(input_stream)
             if message is None:
@@ -122,3 +134,7 @@ def run_chrome_host(
         for event in getattr(api, "pop_events", lambda: [])():
             writer.send(event)
         writer.send(response)
+
+
+def main() -> int:
+    return run_chrome_host()
