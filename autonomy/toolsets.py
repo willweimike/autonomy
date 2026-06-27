@@ -126,7 +126,12 @@ TOOLSET_CATALOG: tuple[ToolsetDefinition, ...] = (
     ToolsetDefinition("session_search", "Conversation history search tools."),
     ToolsetDefinition("clarify", "Clarifying question tools."),
     ToolsetDefinition("code_execution", "Programmatic code execution tools."),
-    ToolsetDefinition("delegate", "Child task delegation tools."),
+    ToolsetDefinition(
+        "delegate",
+        "Child task delegation tools.",
+        "implemented",
+        ("delegate.run",),
+    ),
     ToolsetDefinition("cronjob", "Scheduled task tools."),
     ToolsetDefinition("messaging", "Cross-platform messaging tools."),
     ToolsetDefinition("computer_use", "Desktop computer-use tools."),

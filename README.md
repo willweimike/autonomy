@@ -364,8 +364,8 @@ autonomy tools disable terminal
 ```
 
 The catalog includes implemented `project`, `browser`, `memory`, `database`,
-and `mcp` toolsets plus planned Hermes-like toolsets such as `delegate`,
-`cronjob`, and `computer_use`. Planned or unavailable tools are not exposed to
+`mcp`, and `delegate` toolsets plus planned Hermes-like toolsets such as
+`cronjob` and `computer_use`. Planned or unavailable tools are not exposed to
 the agent loop.
 Enabling a toolset only controls which implemented and available tools are
 visible to planning; it does not grant extra permissions or bypass

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .delegation import AgentExecutionContext, reset_agent_execution_context, set_agent_execution_context
 from .models import Action, ActionIntent, CandidatePath, Observation, RiskLevel, RunState
 from .store import AutonomyStore
 from .tools import ApprovalPolicy, ToolRegistry
@@ -148,7 +149,17 @@ class ActionGateway:
         return allowed, approval_reason
 
     def execute_action(self, state: RunState, action: Action) -> Observation:
-        observation = self.tools.execute(action)
+        token = set_agent_execution_context(
+            AgentExecutionContext(
+                run_id=state.run_id,
+                step=state.step,
+                max_steps=state.max_steps,
+            )
+        )
+        try:
+            observation = self.tools.execute(action)
+        finally:
+            reset_agent_execution_context(token)
         self.store.record_event(
             state.run_id,
             state.step,

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +53,16 @@ class SequenceModel:
             body="# Learned\n\nFollow the successful steps.",
             requires_tools=("test.tool",),
         )
+
+
+class CapturingSequenceModel(SequenceModel):
+    def __init__(self, candidates_by_call):
+        super().__init__(candidates_by_call)
+        self.available_tools_by_call = []
+
+    def propose(self, state, available_tools, procedure_skills, tool_specs=None):
+        self.available_tools_by_call.append(set(available_tools))
+        return super().propose(state, available_tools, procedure_skills, tool_specs=tool_specs)
 
 
 def candidate(
@@ -201,6 +212,93 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(result.termination, TerminationReason.ACHIEVED)
         self.assertEqual(result.steps_executed, 1)
         self.assertEqual(self.executions, [{"response": "你好，我是 Autonomy。"}])
+
+    def test_delegate_run_starts_unrestricted_child_agent_loop(self):
+        from autonomy.tools.toolsets.delegate import register_delegate_tools
+
+        def parent_only(arguments):
+            self.executions.append(("parent.only", arguments))
+            return Observation("", True, output="child ok", evidence=("parent_only",))
+
+        self.registry.register("parent.only", parent_only)
+        loop_ref = {}
+        register_delegate_tools(
+            self.registry,
+            lambda goal, max_steps, context: loop_ref["loop"].delegate_child(goal, max_steps, context),
+        )
+        model = CapturingSequenceModel(
+            [
+                [
+                    candidate(
+                        tool="delegate.run",
+                        arguments={"goal": "child task"},
+                        purpose="delegate child task",
+                    )
+                ],
+                [candidate(tool="parent.only", arguments={"_goal_achieving": True})],
+                [candidate(goal_achieving=True)],
+            ]
+        )
+        loop = self.agent_loop(model)
+        loop_ref["loop"] = loop
+
+        result = loop.run("parent task", max_steps=2, interactive=False)
+
+        parent_journal = self.store.inspect_run(result.run_id)
+        delegate_observation = next(
+            event["payload"]
+            for event in parent_journal["events"]
+            if event["event_type"] == "observation"
+        )
+        child_run_id = json.loads(delegate_observation["output"])["child_run_id"]
+        child_started = self.store.inspect_run(child_run_id)["events"][0]["payload"]
+
+        self.assertEqual(result.termination, TerminationReason.ACHIEVED)
+        self.assertIn("delegate.run", model.available_tools_by_call[1])
+        self.assertIn("parent.only", model.available_tools_by_call[1])
+        self.assertEqual(child_started["interface"], "delegate")
+        self.assertEqual(child_started["parent_run_id"], result.run_id)
+        self.assertEqual(child_started["parent_step"], 1)
+        self.assertEqual(child_started["delegate_goal"], "child task")
+        self.assertEqual(child_started["max_steps"], 2)
+
+    def test_delegate_child_failure_returns_failed_observation(self):
+        from autonomy.tools.toolsets.delegate import register_delegate_tools
+
+        def child_fail(arguments):
+            del arguments
+            return Observation("", False, error="boom", evidence=("child_failed",))
+
+        self.registry.register("child.fail", child_fail)
+        loop_ref = {}
+        register_delegate_tools(
+            self.registry,
+            lambda goal, max_steps, context: loop_ref["loop"].delegate_child(goal, max_steps, context),
+        )
+        model = SequenceModel(
+            [
+                [candidate(tool="delegate.run", arguments={"goal": "child task", "max_steps": 1})],
+                [candidate(tool="child.fail")],
+            ]
+        )
+        loop = self.agent_loop(model)
+        loop_ref["loop"] = loop
+
+        result = loop.run("parent task", max_steps=1, interactive=False)
+
+        parent_journal = self.store.inspect_run(result.run_id)
+        delegate_observation = next(
+            event["payload"]
+            for event in parent_journal["events"]
+            if event["event_type"] == "observation"
+        )
+        payload = json.loads(delegate_observation["output"])
+
+        self.assertEqual(result.termination, TerminationReason.BLOCKED)
+        self.assertFalse(delegate_observation["succeeded"])
+        self.assertIn("child.fail failed", delegate_observation["error"])
+        self.assertEqual(payload["termination"], "blocked")
+        self.assertTrue(payload["child_run_id"])
 
     def test_agent_loop_journals_non_secret_model_provider_context(self):
         model = SequenceModel([[candidate(goal_achieving=True)]])

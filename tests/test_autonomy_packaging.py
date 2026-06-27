@@ -46,3 +46,10 @@ def test_readme_documents_discord_dm_bot_optional_extra():
     assert "DISCORD_BOT_TOKEN" in readme
     assert "DISCORD_OWNER_ID" in readme
     assert "autonomy discord-bot --workspace . --max-steps 12" in readme
+
+
+def test_readme_documents_delegate_toolset_as_implemented():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "`mcp`, and `delegate` toolsets" in readme
+    assert "planned Hermes-like toolsets such as\n`cronjob`" in readme

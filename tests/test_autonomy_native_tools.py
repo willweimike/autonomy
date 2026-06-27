@@ -12,6 +12,7 @@ from unittest.mock import patch
 from autonomy import (
     Action,
     ActionIntent,
+    Observation,
     ApprovalPolicy,
     RiskLevel,
     TOOLSET_CATALOG,
@@ -1075,6 +1076,73 @@ def run_task():
         self.assertNotIn("git.status", default_registry.names)
         self.assertIn("path escapes workspace", reason)
 
+    def test_delegate_toolset_exposes_delegate_run_only_when_enabled_with_runner(self):
+        from autonomy.delegation import AgentExecutionContext
+
+        calls = []
+
+        def delegate_runner(goal, max_steps, context):
+            calls.append((goal, max_steps, context))
+            return Observation("", True, output=json.dumps({"child_run_id": "child-1"}))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            default_registry = build_local_tool_registry(tmpdir, ToolsetConfiguration())
+            delegate_registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("delegate",)),
+                delegate_runner=delegate_runner,
+            )
+
+            self.assertNotIn("delegate.run", default_registry.names)
+            self.assertEqual(delegate_registry.names, {"delegate.run"})
+            self.assertEqual(delegate_registry.spec("delegate.run").toolset, "delegate")
+            self.assertEqual(delegate_registry.spec("delegate.run").default_risk, RiskLevel.LOW)
+
+            from autonomy.delegation import set_agent_execution_context, reset_agent_execution_context
+
+            token = set_agent_execution_context(AgentExecutionContext("parent-1", 2, 4))
+            try:
+                observation = delegate_registry.execute(
+                    Action("delegate.run", {"goal": "investigate", "max_steps": 3}, "delegate", "verify")
+                )
+            finally:
+                reset_agent_execution_context(token)
+
+        self.assertTrue(observation.succeeded)
+        self.assertEqual(calls[0][0], "investigate")
+        self.assertEqual(calls[0][1], 3)
+        self.assertEqual(calls[0][2].run_id, "parent-1")
+
+    def test_delegate_tool_validates_goal_and_max_steps(self):
+        from autonomy.delegation import AgentExecutionContext
+        from autonomy.delegation import reset_agent_execution_context, set_agent_execution_context
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("delegate",)),
+                delegate_runner=lambda goal, max_steps, context: Observation("", True),
+            )
+
+            missing_goal = registry.rejection_reason(
+                ActionIntent("delegate.run", {"goal": ""}, "delegate")
+            )
+            bad_steps = registry.rejection_reason(
+                ActionIntent("delegate.run", {"goal": "work", "max_steps": 0}, "delegate")
+            )
+
+            token = set_agent_execution_context(AgentExecutionContext("parent-1", 2, 5))
+            try:
+                observation = registry.execute(
+                    Action("delegate.run", {"goal": "work"}, "delegate", "verify")
+                )
+            finally:
+                reset_agent_execution_context(token)
+
+        self.assertIn("goal must not be empty", missing_goal)
+        self.assertIn("max_steps must be at least 1", bad_steps)
+        self.assertTrue(observation.succeeded)
+
     def test_project_toolset_catalog_lists_all_implemented_project_tools(self):
         project_toolset = next(definition for definition in TOOLSET_CATALOG if definition.name == "project")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1089,6 +1157,12 @@ def run_task():
         }
 
         self.assertEqual(set(project_toolset.tools), implemented_project_tools)
+
+    def test_delegate_toolset_catalog_lists_delegate_run(self):
+        delegate_toolset = next(definition for definition in TOOLSET_CATALOG if definition.name == "delegate")
+
+        self.assertEqual(delegate_toolset.status, "implemented")
+        self.assertEqual(delegate_toolset.tools, ("delegate.run",))
 
     def test_file_toolset_catalog_lists_all_implemented_file_tools(self):
         file_toolset = next(definition for definition in TOOLSET_CATALOG if definition.name == "file")

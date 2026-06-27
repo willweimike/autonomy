@@ -99,13 +99,22 @@ def build_agent_loop(
     model = AutonomyModel.from_provider(provider)
     procedure_skills = ProcedureSkillLibrary(workspace, store)
     toolsets = ToolsetConfigStore(tool_config_dir or _toolset_config_dir_for(workspace)).load()
-    tools = build_local_tool_registry(workspace, toolsets)
+    agent_loop_ref: dict[str, AgentLoop] = {}
+
+    def delegate_runner(goal, max_steps, parent_context):
+        return agent_loop_ref["loop"].delegate_child(goal, max_steps, parent_context)
+
+    tools = build_local_tool_registry(
+        workspace,
+        toolsets,
+        delegate_runner=delegate_runner,
+    )
     action_gateway = ActionGateway(
         tools=tools,
         store=store,
         approval=ApprovalPolicy(),
     )
-    return AgentLoop(
+    agent_loop = AgentLoop(
         model=model,
         action_gateway=action_gateway,
         outcome_evaluator=ModelAssistedOutcomeEvaluator(model),
@@ -116,6 +125,8 @@ def build_agent_loop(
         curator_daemon=CuratorDaemon(SkillCurator(procedure_skills, store)),
         project_context=load_project_context(workspace),
     )
+    agent_loop_ref["loop"] = agent_loop
+    return agent_loop
 
 
 class SessionShell:

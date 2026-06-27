@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 from .action_gateway import ActionGateway
+from .delegation import AgentExecutionContext
 from .learning import LearningLoop
 from .model import CandidateModel
 from .models import (
     CandidatePath,
     Goal,
     GoalStatus,
+    Observation,
     Outcome,
     ProcedureSkill,
     ProcedureSkillSummary,
@@ -43,6 +46,7 @@ class AgentLoop:
         learning_loop: LearningLoop | None = None,
         curator_daemon: CuratorDaemon | None = None,
         project_context: ProjectContext | None = None,
+        close_tools_on_finish: bool = True,
     ):
         self.model = model
         self.action_gateway = action_gateway
@@ -58,6 +62,7 @@ class AgentLoop:
         )
         self.curator_daemon = curator_daemon
         self.project_context = project_context
+        self.close_tools_on_finish = close_tools_on_finish
 
     @property
     def tools(self):
@@ -124,6 +129,7 @@ class AgentLoop:
         state = RunState(
             run_id=uuid.uuid4().hex,
             goal=Goal(goal.strip()),
+            max_steps=max_steps,
             conversation_context="\n\n".join(context_parts),
             project_context=self.project_context.content if self.project_context else "",
         )
@@ -163,6 +169,53 @@ class AgentLoop:
                 },
             )
         return state
+
+    def delegate_child(
+        self,
+        goal: str,
+        max_steps: int,
+        parent_context: AgentExecutionContext,
+    ) -> Observation:
+        child = AgentLoop(
+            model=self.model,
+            action_gateway=self.action_gateway,
+            outcome_evaluator=self.outcome_evaluator,
+            store=self.store,
+            selector=self.selector,
+            recipes=self.recipes,
+            procedure_skills=self.procedure_skills,
+            learning_loop=self.learning_loop,
+            curator_daemon=self.curator_daemon,
+            project_context=self.project_context,
+            close_tools_on_finish=False,
+        )
+        result = child.run(
+            goal,
+            max_steps=max_steps,
+            interactive=True,
+            interface="delegate",
+            journal_metadata={
+                "parent_run_id": parent_context.run_id,
+                "parent_step": parent_context.step,
+                "delegate_goal": goal,
+                "max_steps": max_steps,
+            },
+        )
+        payload = {
+            "child_run_id": result.run_id,
+            "termination": result.termination.value,
+            "steps_executed": result.steps_executed,
+            "reason": result.reason,
+        }
+        succeeded = result.termination == TerminationReason.ACHIEVED
+        return Observation(
+            "",
+            succeeded,
+            output=json.dumps(payload, sort_keys=True),
+            error="" if succeeded else result.reason,
+            evidence=(f"child_run:{result.run_id}",),
+            side_effects=("child-agent-run",),
+        )
 
     def run_turn(self, state: RunState, *, interactive: bool) -> RunResult | None:
         loaded_skills = self.disclose_procedure_skills(state)
@@ -387,15 +440,16 @@ class AgentLoop:
                     "curator_daemon_error",
                     {"error": str(exc)},
                 )
-        try:
-            self.tools.close()
-        except Exception as exc:
-            self.store.record_event(
-                state.run_id,
-                state.step,
-                "tool_cleanup_error",
-                {"error": str(exc)},
-            )
+        if self.close_tools_on_finish:
+            try:
+                self.tools.close()
+            except Exception as exc:
+                self.store.record_event(
+                    state.run_id,
+                    state.step,
+                    "tool_cleanup_error",
+                    {"error": str(exc)},
+                )
         result = RunResult(
             run_id=state.run_id,
             goal=state.goal.text,

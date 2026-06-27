@@ -155,6 +155,7 @@ class RunState:
     run_id: str
     goal: Goal
     step: int = 0
+    max_steps: int = 12
     transitions: list[Transition] = field(default_factory=list)
     current_state: str = "No actions have been executed."
     conversation_context: str = ""
