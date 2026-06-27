@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import struct
 import sys
+import threading
 from typing import Any, BinaryIO, Mapping, Protocol
 
 
@@ -13,6 +14,7 @@ _REQUEST_TYPES = {
     "session.start",
     "chat.send",
     "run.inspect",
+    "approval.respond",
 }
 
 
@@ -23,6 +25,16 @@ class ChromeHostError(ValueError):
 class ChromeBridge(Protocol):
     def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         ...
+
+
+class NativeMessageWriter:
+    def __init__(self, stream: BinaryIO):
+        self.stream = stream
+        self._lock = threading.Lock()
+
+    def send(self, payload: Mapping[str, Any]) -> None:
+        with self._lock:
+            write_native_message(self.stream, payload)
 
 
 def read_native_message(
@@ -73,6 +85,7 @@ def run_chrome_host(
     input_stream = sys.stdin.buffer if input_stream is None else input_stream
     output_stream = sys.stdout.buffer if output_stream is None else output_stream
     api = ChromeSessionBridge() if api is None else api
+    writer = NativeMessageWriter(output_stream)
     while True:
         try:
             message = read_native_message(input_stream)
@@ -81,10 +94,12 @@ def run_chrome_host(
             response = api.handle(message)
         except ChromeHostError as exc:
             try:
-                write_native_message(output_stream, {"ok": False, "error": str(exc)})
+                writer.send({"ok": False, "error": str(exc)})
             finally:
                 return 1
         except Exception as exc:
-            write_native_message(output_stream, {"ok": False, "error": str(exc)})
+            writer.send({"ok": False, "error": str(exc)})
             return 1
-        write_native_message(output_stream, response)
+        for event in getattr(api, "pop_events", lambda: [])():
+            writer.send(event)
+        writer.send(response)

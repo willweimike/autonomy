@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -12,6 +14,61 @@ from .models import jsonable
 from .providers import ModelConfigStore, ProviderConfigurationError, create_provider
 from .storage import workspace_autonomy_home, workspace_db_path
 from .store import AutonomyStore
+from .tools import ApprovalPolicy
+
+
+class ChromeApprovalBroker:
+    def __init__(
+        self,
+        send_event: Callable[[dict[str, Any]], None],
+        *,
+        timeout_seconds: float = 120.0,
+    ):
+        self.send_event = send_event
+        self.timeout_seconds = timeout_seconds
+        self._condition = threading.Condition()
+        self._pending: dict[str, bool | None] = {}
+
+    def prompt(self, message: str) -> bool:
+        approval_id = uuid.uuid4().hex
+        with self._condition:
+            self._pending[approval_id] = None
+        self.send_event(
+            {
+                "ok": True,
+                "type": "approval.requested",
+                "approval_id": approval_id,
+                "message": self._redact(message),
+            }
+        )
+        deadline = time.monotonic() + self.timeout_seconds
+        with self._condition:
+            while self._pending.get(approval_id) is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._pending.pop(approval_id, None)
+                    return False
+                self._condition.wait(remaining)
+            return bool(self._pending.pop(approval_id))
+
+    def respond(self, approval_id: str, decision: str) -> dict[str, Any]:
+        if decision not in {"allow", "deny"}:
+            return {"ok": False, "error": "decision must be allow or deny"}
+        with self._condition:
+            if approval_id not in self._pending:
+                return {"ok": False, "error": "unknown approval"}
+            self._pending[approval_id] = decision == "allow"
+            self._condition.notify_all()
+        return {
+            "ok": True,
+            "type": "approval.result",
+            "approval_id": approval_id,
+            "decision": decision,
+        }
+
+    @staticmethod
+    def _redact(message: str) -> str:
+        return message.replace(".autonomy/.env", ".autonomy/[redacted]")
 
 
 class ChromeSessionBridge:
@@ -33,6 +90,8 @@ class ChromeSessionBridge:
         self.store_factory = store_factory
         self.sessions: dict[str, Any] = {}
         self.session_stores: dict[str, Any] = {}
+        self.events: list[dict[str, Any]] = []
+        self.approval_broker = ChromeApprovalBroker(self._send_event)
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         request_type = str(message.get("type") or "")
@@ -45,6 +104,11 @@ class ChromeSessionBridge:
                 return self._chat_send(message)
             if request_type == "run.inspect":
                 return self._run_inspect(message)
+            if request_type == "approval.respond":
+                return self.approval_broker.respond(
+                    str(message.get("approval_id") or ""),
+                    str(message.get("decision") or ""),
+                )
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": False, "error": "unknown request type"}
@@ -66,7 +130,7 @@ class ChromeSessionBridge:
             workspace=workspace,
             db_path=db_path,
             max_steps=max_steps,
-            agent_loop_factory=build_agent_loop,
+            agent_loop_factory=self._agent_loop_factory,
             responder=self._responder_for(workspace),
             store=store,
             session_id=session_id,
@@ -121,6 +185,11 @@ class ChromeSessionBridge:
             }
         return {"ok": False, "error": "unknown run"}
 
+    def pop_events(self) -> list[dict[str, Any]]:
+        events = list(self.events)
+        self.events.clear()
+        return events
+
     def _workspace_from(self, message: dict[str, Any]) -> Path:
         raw_workspace = message.get("workspace")
         if raw_workspace in (None, ""):
@@ -143,6 +212,14 @@ class ChromeSessionBridge:
         if self.db_path is not None:
             return self.db_path.expanduser()
         return workspace_db_path(workspace)
+
+    def _send_event(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+
+    def _agent_loop_factory(self, workspace: Path, db_path: Path):
+        agent_loop = build_agent_loop(workspace, db_path)
+        agent_loop.action_gateway.approval = ApprovalPolicy(prompt=self.approval_broker.prompt)
+        return agent_loop
 
     def _responder_for(self, workspace: Path):
         try:

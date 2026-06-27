@@ -2,6 +2,8 @@ import io
 import json
 import struct
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -14,6 +16,17 @@ from autonomy.models import ConversationResponse, RunResult, TerminationReason
 def framed(payload: dict) -> bytes:
     body = json.dumps(payload).encode("utf-8")
     return struct.pack("<I", len(body)) + body
+
+
+def decode_framed_messages(data: bytes) -> list[dict]:
+    messages = []
+    offset = 0
+    while offset < len(data):
+        size = struct.unpack("<I", data[offset : offset + 4])[0]
+        offset += 4
+        messages.append(json.loads(data[offset : offset + size].decode("utf-8")))
+        offset += size
+    return messages
 
 
 class AutonomyNativeChromeHostTest(unittest.TestCase):
@@ -29,6 +42,24 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
         size = struct.unpack("<I", outgoing.getvalue()[:4])[0]
         payload = json.loads(outgoing.getvalue()[4 : 4 + size].decode("utf-8"))
         self.assertEqual(payload, {"ok": True, "type": "status.result"})
+
+    def test_native_message_accepts_approval_response(self):
+        from autonomy.chrome_host import read_native_message
+
+        incoming = io.BytesIO(
+            framed(
+                {
+                    "type": "approval.respond",
+                    "approval_id": "abc123",
+                    "decision": "allow",
+                }
+            )
+        )
+
+        self.assertEqual(
+            read_native_message(incoming),
+            {"type": "approval.respond", "approval_id": "abc123", "decision": "allow"},
+        )
 
     def test_native_message_rejects_non_object_and_oversized_payload(self):
         from autonomy.chrome_host import ChromeHostError, read_native_message
@@ -95,6 +126,27 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         run_host.assert_called_once()
+
+    def test_chrome_host_emits_queued_events_before_response(self):
+        from autonomy.chrome_host import run_chrome_host
+
+        class FakeApi:
+            def handle(self, message):
+                self.message = message
+                return {"ok": True, "type": "chat.result"}
+
+            def pop_events(self):
+                return [{"ok": True, "type": "approval.requested", "approval_id": "a1"}]
+
+        incoming = io.BytesIO(framed({"type": "status"}))
+        outgoing = io.BytesIO()
+
+        result = run_chrome_host(input_stream=incoming, output_stream=outgoing, api=FakeApi())
+
+        self.assertEqual(result, 0)
+        first, second = decode_framed_messages(outgoing.getvalue())
+        self.assertEqual(first["type"], "approval.requested")
+        self.assertEqual(second["type"], "chat.result")
 
 
 class FakeConversation:
@@ -210,3 +262,46 @@ class AutonomyNativeChromeApiTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["type"], "run.inspect.result")
         self.assertEqual(result["run"]["run_id"], "run-1")
+
+
+class AutonomyNativeChromeApprovalTest(unittest.TestCase):
+    def test_approval_broker_allows_matching_response(self):
+        from autonomy.chrome_api import ChromeApprovalBroker
+
+        events = []
+        broker = ChromeApprovalBroker(events.append, timeout_seconds=1.0)
+        result = {}
+
+        thread = threading.Thread(
+            target=lambda: result.update({"allowed": broker.prompt("Approve high-risk action?")})
+        )
+        thread.start()
+        time.sleep(0.05)
+
+        self.assertEqual(events[0]["type"], "approval.requested")
+        response = broker.respond(events[0]["approval_id"], "allow")
+        thread.join(timeout=1.0)
+
+        self.assertTrue(response["ok"])
+        self.assertTrue(result["allowed"])
+
+    def test_approval_broker_denies_timeout_and_bad_decision(self):
+        from autonomy.chrome_api import ChromeApprovalBroker
+
+        events = []
+        broker = ChromeApprovalBroker(events.append, timeout_seconds=0.01)
+
+        self.assertFalse(broker.prompt("Approve medium-risk action?"))
+        self.assertEqual(events[0]["type"], "approval.requested")
+
+        denied = broker.respond("missing", "allow")
+        self.assertFalse(denied["ok"])
+
+        broker = ChromeApprovalBroker(events.append, timeout_seconds=1.0)
+        result = {}
+        thread = threading.Thread(target=lambda: result.update({"allowed": broker.prompt("Approve?")}))
+        thread.start()
+        time.sleep(0.05)
+        broker.respond(events[-1]["approval_id"], "deny")
+        thread.join(timeout=1.0)
+        self.assertFalse(result["allowed"])
