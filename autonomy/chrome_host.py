@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import struct
 import sys
-from pathlib import Path
 from typing import Any, BinaryIO, Mapping, Protocol
 
 
@@ -73,9 +72,6 @@ def run_chrome_host(
     output_stream: BinaryIO | None = None,
     api: ChromeBridge | None = None,
 ) -> int:
-    workspace = Path.cwd()
-    if not workspace.is_dir():
-        raise ChromeHostError(f"workspace is not a directory: {workspace}")
     input_stream = sys.stdin.buffer if input_stream is None else input_stream
     output_stream = sys.stdout.buffer if output_stream is None else output_stream
     api = EchoStatusBridge() if api is None else api
