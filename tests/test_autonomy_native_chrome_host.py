@@ -148,6 +148,43 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
         self.assertEqual(first["type"], "approval.requested")
         self.assertEqual(second["type"], "chat.result")
 
+    def test_chrome_host_processes_approval_while_chat_send_is_blocked(self):
+        from autonomy.chrome_host import run_chrome_host
+
+        class FakeApi:
+            def __init__(self):
+                self._writer = None
+                self._approved = threading.Event()
+
+            def set_event_sink(self, writer):
+                self._writer = writer
+
+            def handle(self, message):
+                if message["type"] == "chat.send":
+                    self._writer(
+                        {"ok": True, "type": "approval.requested", "approval_id": "a1"}
+                    )
+                    self._approved.wait(timeout=0.2)
+                    return {"ok": True, "type": "chat.result", "reply": "done"}
+                if message["type"] == "approval.respond":
+                    self._approved.set()
+                    return {"ok": True, "type": "approval.result", "approval_id": "a1"}
+                return {"ok": True, "type": "status.result"}
+
+        incoming = io.BytesIO(
+            framed({"type": "chat.send"}) + framed({"type": "approval.respond"})
+        )
+        outgoing = io.BytesIO()
+
+        result = run_chrome_host(input_stream=incoming, output_stream=outgoing, api=FakeApi())
+
+        self.assertEqual(result, 0)
+        messages = decode_framed_messages(outgoing.getvalue())
+        self.assertEqual(
+            [message["type"] for message in messages],
+            ["approval.requested", "approval.result", "chat.result"],
+        )
+
 
 class FakeConversation:
     def __init__(

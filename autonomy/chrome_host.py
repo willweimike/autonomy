@@ -86,11 +86,28 @@ def run_chrome_host(
     output_stream = sys.stdout.buffer if output_stream is None else output_stream
     api = ChromeSessionBridge() if api is None else api
     writer = NativeMessageWriter(output_stream)
+    if hasattr(api, "set_event_sink"):
+        api.set_event_sink(writer.send)
+    workers: list[threading.Thread] = []
+
+    def handle_in_worker(message: dict[str, Any]) -> None:
+        try:
+            writer.send(api.handle(message))
+        except Exception as exc:
+            writer.send({"ok": False, "error": str(exc)})
+
     while True:
         try:
             message = read_native_message(input_stream)
             if message is None:
+                for worker in workers:
+                    worker.join()
                 return 0
+            if message["type"] == "chat.send":
+                worker = threading.Thread(target=handle_in_worker, args=(message,))
+                worker.start()
+                workers.append(worker)
+                continue
             response = api.handle(message)
         except ChromeHostError as exc:
             try:

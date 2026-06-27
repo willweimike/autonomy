@@ -91,6 +91,7 @@ class ChromeSessionBridge:
         self.sessions: dict[str, Any] = {}
         self.session_stores: dict[str, Any] = {}
         self.events: list[dict[str, Any]] = []
+        self.event_sink: Callable[[dict[str, Any]], None] | None = None
         self.approval_broker = ChromeApprovalBroker(self._send_event)
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any]:
@@ -190,6 +191,9 @@ class ChromeSessionBridge:
         self.events.clear()
         return events
 
+    def set_event_sink(self, sink: Callable[[dict[str, Any]], None] | None) -> None:
+        self.event_sink = sink
+
     def _workspace_from(self, message: dict[str, Any]) -> Path:
         raw_workspace = message.get("workspace")
         if raw_workspace in (None, ""):
@@ -214,6 +218,9 @@ class ChromeSessionBridge:
         return workspace_db_path(workspace)
 
     def _send_event(self, event: dict[str, Any]) -> None:
+        if self.event_sink is not None:
+            self.event_sink(event)
+            return
         self.events.append(event)
 
     def _agent_loop_factory(self, workspace: Path, db_path: Path):
