@@ -37,6 +37,13 @@ class NativeMessageWriter:
             write_native_message(self.stream, payload)
 
 
+def _error_payload(error: object) -> dict[str, Any]:
+    message = str(error)
+    if len(message) > 4_000:
+        message = f"{message[:4_000]}... [truncated]"
+    return {"ok": False, "error": message}
+
+
 def read_native_message(
     stream: BinaryIO,
     *,
@@ -101,11 +108,22 @@ def run_chrome_host(
             worker.join()
         workers[:] = alive_workers
 
+    def send_error(error: object) -> None:
+        writer.send(_error_payload(error))
+
+    def send_or_error(payload: Mapping[str, Any]) -> bool:
+        try:
+            writer.send(payload)
+            return True
+        except ChromeHostError as exc:
+            send_error(exc)
+            return False
+
     def handle_in_worker(message: dict[str, Any]) -> None:
         try:
-            writer.send(api.handle(message))
+            send_or_error(api.handle(message))
         except Exception as exc:
-            writer.send({"ok": False, "error": str(exc)})
+            send_error(exc)
 
     while True:
         prune_finished_workers()
@@ -125,15 +143,17 @@ def run_chrome_host(
             response = api.handle(message)
         except ChromeHostError as exc:
             try:
-                writer.send({"ok": False, "error": str(exc)})
+                send_error(exc)
             finally:
                 return 1
         except Exception as exc:
-            writer.send({"ok": False, "error": str(exc)})
+            send_error(exc)
             return 1
         for event in getattr(api, "pop_events", lambda: [])():
-            writer.send(event)
-        writer.send(response)
+            if not send_or_error(event):
+                return 1
+        if not send_or_error(response):
+            return 1
 
 
 def main() -> int:

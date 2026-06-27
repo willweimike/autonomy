@@ -203,6 +203,45 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
             ["approval.requested", "approval.result", "chat.result"],
         )
 
+    def test_chrome_host_reports_oversized_sync_response(self):
+        from autonomy.chrome_host import run_chrome_host
+
+        class FakeApi:
+            def handle(self, message):
+                del message
+                return {"ok": True, "type": "status.result", "body": "x" * 1_000_000}
+
+        incoming = io.BytesIO(framed({"type": "status"}))
+        outgoing = io.BytesIO()
+
+        result = run_chrome_host(input_stream=incoming, output_stream=outgoing, api=FakeApi())
+
+        self.assertEqual(result, 1)
+        messages = decode_framed_messages(outgoing.getvalue())
+        self.assertEqual(len(messages), 1)
+        self.assertFalse(messages[0]["ok"])
+        self.assertIn("native message exceeds", messages[0]["error"])
+
+    def test_chrome_host_truncates_oversized_handler_error(self):
+        from autonomy.chrome_host import run_chrome_host
+
+        class FakeApi:
+            def handle(self, message):
+                del message
+                raise ValueError("x" * 1_000_000)
+
+        incoming = io.BytesIO(framed({"type": "status"}))
+        outgoing = io.BytesIO()
+
+        result = run_chrome_host(input_stream=incoming, output_stream=outgoing, api=FakeApi())
+
+        self.assertEqual(result, 1)
+        messages = decode_framed_messages(outgoing.getvalue())
+        self.assertEqual(len(messages), 1)
+        self.assertFalse(messages[0]["ok"])
+        self.assertLess(len(messages[0]["error"]), 5_000)
+        self.assertIn("[truncated]", messages[0]["error"])
+
 
 class FakeConversation:
     def __init__(
