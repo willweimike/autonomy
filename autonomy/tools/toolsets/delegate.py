@@ -8,16 +8,24 @@ from ..registry import ToolRegistry
 
 
 DelegateRunner = Callable[[str, int, AgentExecutionContext], Observation]
+_NO_RUNNER_REASON = "delegate.run is only available inside AgentLoop"
 
 
-def register_delegate_tools(registry: ToolRegistry, delegate_runner: DelegateRunner) -> None:
+def register_delegate_tools(registry: ToolRegistry, delegate_runner: DelegateRunner | None) -> None:
     def delegate_run(arguments: dict) -> Observation:
+        if delegate_runner is None:
+            return Observation("", False, error=_NO_RUNNER_REASON)
         context = current_agent_execution_context()
         if context is None:
             return Observation("", False, error="delegate.run requires an active parent run")
         goal = _delegate_goal(arguments)
         max_steps = _delegate_max_steps(arguments, default=context.max_steps)
         return delegate_runner(goal, max_steps, context)
+
+    def delegate_available() -> tuple[bool, str]:
+        if delegate_runner is None:
+            return False, _NO_RUNNER_REASON
+        return True, ""
 
     registry.register(
         "delegate.run",
@@ -31,6 +39,7 @@ def register_delegate_tools(registry: ToolRegistry, delegate_runner: DelegateRun
         },
         default_risk=RiskLevel.LOW,
         side_effects=("child-agent-run",),
+        availability_check=delegate_available,
     )
 
 

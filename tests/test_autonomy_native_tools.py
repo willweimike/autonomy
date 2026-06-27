@@ -1113,6 +1113,23 @@ def run_task():
         self.assertEqual(calls[0][1], 3)
         self.assertEqual(calls[0][2].run_id, "parent-1")
 
+    def test_delegate_toolset_status_marks_delegate_run_unavailable_without_runner(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_local_tool_registry(
+                tmpdir,
+                ToolsetConfiguration(enabled_toolsets=("delegate",)),
+                require_available=False,
+            )
+            rows = toolset_catalog_status(
+                ToolsetConfiguration(enabled_toolsets=("delegate",)),
+                registry.tool_statuses(),
+            )
+
+        delegate_row = next(row for row in rows if row["name"] == "delegate")
+        self.assertEqual(delegate_row["available_tools"], [])
+        self.assertEqual(delegate_row["unavailable_tools"][0]["tool"], "delegate.run")
+        self.assertIn("AgentLoop", delegate_row["unavailable_tools"][0]["reason"])
+
     def test_delegate_tool_validates_goal_and_max_steps(self):
         from autonomy.delegation import AgentExecutionContext
         from autonomy.delegation import reset_agent_execution_context, set_agent_execution_context

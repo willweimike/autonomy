@@ -359,6 +359,7 @@ autonomy tools status
 autonomy tools enable project
 autonomy tools enable database
 autonomy tools enable mcp
+autonomy tools enable delegate
 autonomy tools enable browser
 autonomy tools disable terminal
 ```

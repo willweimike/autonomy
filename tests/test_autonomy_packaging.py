@@ -52,4 +52,5 @@ def test_readme_documents_delegate_toolset_as_implemented():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "`mcp`, and `delegate` toolsets" in readme
+    assert "autonomy tools enable delegate" in readme
     assert "planned Hermes-like toolsets such as\n`cronjob`" in readme

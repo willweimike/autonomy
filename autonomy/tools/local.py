@@ -2731,7 +2731,7 @@ def build_local_tool_registry(
     )
     registry.register_cleanup(browser_controller.close)
     register_database_tools(registry, root)
-    if toolsets is not None and "delegate" in toolsets.enabled_set and delegate_runner is not None:
+    if toolsets is not None and "delegate" in toolsets.enabled_set:
         register_delegate_tools(registry, delegate_runner)
     if toolsets is not None and "mcp" in toolsets.enabled_set:
         register_mcp_tools(registry, root)
