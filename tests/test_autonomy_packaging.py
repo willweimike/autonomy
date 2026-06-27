@@ -1,5 +1,7 @@
 from pathlib import Path
 
+ROOT = Path(".")
+
 
 def test_requirements_installs_local_checkout_without_pinned_git_url():
     text = Path("requirements.txt").read_text(encoding="utf-8")
@@ -22,3 +24,12 @@ def test_workspace_runtime_state_is_gitignored():
     text = Path(".gitignore").read_text(encoding="utf-8")
 
     assert ".autonomy/" in text
+
+
+def test_readme_documents_chrome_extension_native_host():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "autonomy chrome-host" in text
+    assert "chrome-extension" in text
+    assert "native-host.example.json" in text
+    assert "com.autonomy.app" in text

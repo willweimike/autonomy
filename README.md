@@ -126,6 +126,41 @@ python3.13 -m autonomy skills reject CANDIDATE_ID
 python3.13 -m autonomy skills disable SKILL_NAME
 ```
 
+## Chrome Extension UI
+
+Autonomy includes a local Chrome side panel UI for development.
+
+The extension does not execute tools directly. It talks to the local native
+messaging host, and the host routes requests into:
+
+```text
+ConversationLoop(interface="chrome") -> AgentLoop -> ActionGateway -> ToolRegistry
+```
+
+Host command:
+
+```bash
+autonomy chrome-host
+```
+
+Development setup:
+
+1. Install this checkout in your active Python environment.
+2. Load `chrome-extension/` as an unpacked extension in Chrome.
+3. Copy `chrome-extension/native-host.example.json` to Chrome's native messaging host directory.
+4. Replace `EXTENSION_ID` with the unpacked extension ID.
+5. Replace `path` with the absolute path to the `autonomy` executable from your environment.
+
+Native host name:
+
+```text
+com.autonomy.app
+```
+
+The native host manifest restricts access to the configured extension origin.
+The extension never receives provider API keys or `.autonomy/.env` content.
+Approval prompts default to deny on timeout or disconnect.
+
 ## Interactive Session
 
 `autonomy` and `autonomy tui` start the terminal UI. Natural language input now
