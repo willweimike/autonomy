@@ -1,11 +1,14 @@
 import io
 import json
 import struct
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from autonomy.cli import build_parser, main
+from autonomy.models import ConversationResponse, RunResult, TerminationReason
 
 
 def framed(payload: dict) -> bytes:
@@ -46,7 +49,7 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
         from autonomy.chrome_host import ChromeHostError, read_native_message
 
         with self.assertRaisesRegex(ChromeHostError, "unknown type"):
-            read_native_message(io.BytesIO(framed({"type": "session.start"})))
+            read_native_message(io.BytesIO(framed({"type": "nope"})))
 
     def test_native_message_rejects_malformed_json(self):
         from autonomy.chrome_host import ChromeHostError, read_native_message
@@ -92,3 +95,118 @@ class AutonomyNativeChromeHostTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         run_host.assert_called_once()
+
+
+class FakeConversation:
+    def __init__(
+        self,
+        *,
+        workspace,
+        db_path,
+        max_steps,
+        agent_loop_factory,
+        responder,
+        store=None,
+        session_id=None,
+        interface="tui",
+    ):
+        del agent_loop_factory, responder, store
+        self.workspace = workspace
+        self.db_path = db_path
+        self.max_steps = max_steps
+        self.session_id = session_id
+        self.interface = interface
+        self.inputs = []
+
+    def handle_user_input(self, text):
+        self.inputs.append(text)
+        run_result = RunResult(
+            run_id="run-1",
+            goal=text,
+            termination=TerminationReason.ACHIEVED,
+            reason="done",
+            steps_executed=1,
+        )
+        return ConversationResponse(
+            session_id="session-1",
+            user_turn_id="user-1",
+            assistant_turn_id="assistant-1",
+            run_result=run_result,
+            reply="reply text",
+            conversation_context="",
+            candidate_skills=(),
+            action_recipe_candidates=(),
+            decision=None,
+        )
+
+
+class FakeStore:
+    def __init__(self, db_path):
+        self.db_path = db_path
+
+    def inspect_run(self, run_id):
+        return {"run_id": run_id, "events": [{"event_type": "run_started"}]}
+
+
+class AutonomyNativeChromeApiTest(unittest.TestCase):
+    def test_chrome_api_starts_session_and_sends_chat(self):
+        from autonomy.chrome_api import ChromeSessionBridge
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            bridge = ChromeSessionBridge(
+                conversation_factory=FakeConversation,
+                store_factory=FakeStore,
+            )
+
+            started = bridge.handle(
+                {"type": "session.start", "workspace": str(workspace), "max_steps": 3}
+            )
+            result = bridge.handle(
+                {"type": "chat.send", "session_id": started["session_id"], "text": "hello"}
+            )
+
+        self.assertTrue(started["ok"])
+        self.assertEqual(started["type"], "session.started")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["type"], "chat.result")
+        self.assertEqual(result["reply"], "reply text")
+        self.assertEqual(result["run_id"], "run-1")
+        self.assertEqual(result["termination"], "achieved")
+        self.assertEqual(result["steps_executed"], 1)
+
+    def test_chrome_api_rejects_bad_workspace_and_unknown_session(self):
+        from autonomy.chrome_api import ChromeSessionBridge
+
+        bridge = ChromeSessionBridge(
+            conversation_factory=FakeConversation,
+            store_factory=FakeStore,
+        )
+
+        bad_workspace = bridge.handle(
+            {"type": "session.start", "workspace": "/path/does/not/exist"}
+        )
+        unknown_session = bridge.handle(
+            {"type": "chat.send", "session_id": "missing", "text": "hello"}
+        )
+
+        self.assertFalse(bad_workspace["ok"])
+        self.assertIn("workspace must exist", bad_workspace["error"])
+        self.assertFalse(unknown_session["ok"])
+        self.assertIn("unknown session", unknown_session["error"])
+
+    def test_chrome_api_inspects_run(self):
+        from autonomy.chrome_api import ChromeSessionBridge
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            bridge = ChromeSessionBridge(
+                conversation_factory=FakeConversation,
+                store_factory=FakeStore,
+            )
+            bridge.handle({"type": "session.start", "workspace": str(workspace)})
+            result = bridge.handle({"type": "run.inspect", "run_id": "run-1"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["type"], "run.inspect.result")
+        self.assertEqual(result["run"]["run_id"], "run-1")

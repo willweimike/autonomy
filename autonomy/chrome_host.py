@@ -10,6 +10,9 @@ MAX_NATIVE_MESSAGE_BYTES = 1_000_000
 
 _REQUEST_TYPES = {
     "status",
+    "session.start",
+    "chat.send",
+    "run.inspect",
 }
 
 
@@ -20,13 +23,6 @@ class ChromeHostError(ValueError):
 class ChromeBridge(Protocol):
     def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         ...
-
-
-class EchoStatusBridge:
-    def handle(self, message: dict[str, Any]) -> dict[str, Any]:
-        if message.get("type") != "status":
-            return {"ok": False, "error": "unknown request type"}
-        return {"ok": True, "type": "status.result"}
 
 
 def read_native_message(
@@ -72,9 +68,11 @@ def run_chrome_host(
     output_stream: BinaryIO | None = None,
     api: ChromeBridge | None = None,
 ) -> int:
+    from .chrome_api import ChromeSessionBridge
+
     input_stream = sys.stdin.buffer if input_stream is None else input_stream
     output_stream = sys.stdout.buffer if output_stream is None else output_stream
-    api = EchoStatusBridge() if api is None else api
+    api = ChromeSessionBridge() if api is None else api
     while True:
         try:
             message = read_native_message(input_stream)
