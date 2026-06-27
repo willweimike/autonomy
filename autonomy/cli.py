@@ -20,6 +20,7 @@ from .conversation_responder import (
     MissingModelConversationResponder,
     ModelConversationResponder,
 )
+from . import chrome_host
 from .model import AutonomyModel, ModelClientError
 from .models import ActionRecipe, RecipeStatus, jsonable
 from .procedure_skills import ProcedureSkillError, ProcedureSkillLibrary
@@ -513,6 +514,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", type=Path, default=None)
     subparsers = parser.add_subparsers(dest="command", required=False)
 
+    subparsers.add_parser("chrome-host")
+
     run = subparsers.add_parser("run")
     run.add_argument("goal")
     run.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -865,6 +868,8 @@ def _web_readiness(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "chrome-host":
+        return chrome_host.run_chrome_host()
     workspace = _workspace_for_args(args)
     _prepare_workspace_storage(workspace)
     db_path = _db_path_for(workspace, args.db)
