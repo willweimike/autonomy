@@ -33,7 +33,11 @@ class ChromeExtensionStaticTest(unittest.TestCase):
         ):
             self.assertIn(message_type, service_worker + sidepanel)
         self.assertIn('id="workspace"', html)
+        self.assertIn('id="run-id"', html)
+        self.assertIn('id="inspect-run"', html)
         self.assertIn('id="approval-modal"', html)
+        self.assertRegex(sidepanel, r"lastRunId\s*=\s*message\.run_id")
+        self.assertRegex(sidepanel, r'send\(\{\s*type:\s*"run\.inspect",\s*run_id\s*\}\);')
 
     def test_native_host_example_restricts_extension_origin(self):
         manifest = json.loads((EXTENSION / "native-host.example.json").read_text(encoding="utf-8"))

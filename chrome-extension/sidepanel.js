@@ -5,9 +5,11 @@ let pendingApprovalId = "";
 const messages = document.getElementById("messages");
 const workspace = document.getElementById("workspace");
 const maxSteps = document.getElementById("max-steps");
+const runIdInput = document.getElementById("run-id");
 const promptBox = document.getElementById("prompt");
 const approvalModal = document.getElementById("approval-modal");
 const approvalMessage = document.getElementById("approval-message");
+let lastRunId = "";
 
 function append(role, text) {
   const item = document.createElement("article");
@@ -32,6 +34,10 @@ port.onMessage.addListener((message) => {
     sessionId = message.session_id;
     append("system", `session: ${sessionId}`);
   } else if (message.type === "chat.result") {
+    lastRunId = message.run_id || lastRunId;
+    if (message.run_id) {
+      runIdInput.value = message.run_id;
+    }
     append("assistant", `${message.reply}\nrun_id=${message.run_id} termination=${message.termination}`);
   } else if (message.type === "run.inspect.result") {
     append("system", JSON.stringify(message.run, null, 2));
@@ -60,6 +66,12 @@ document.getElementById("send").addEventListener("click", () => {
   append("user", text);
   promptBox.value = "";
   send({ type: "chat.send", session_id: sessionId, text });
+});
+
+document.getElementById("inspect-run").addEventListener("click", () => {
+  const run_id = runIdInput.value.trim() || lastRunId;
+  if (!run_id) return;
+  send({ type: "run.inspect", run_id });
 });
 
 document.getElementById("approval-allow").addEventListener("click", () => {
