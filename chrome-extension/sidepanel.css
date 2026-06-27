@@ -1,0 +1,83 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 14px system-ui, sans-serif;
+  color: #111827;
+  background: #f9fafb;
+}
+
+header,
+#setup,
+#composer {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid #e5e7eb;
+  background: white;
+}
+
+header {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+h1 {
+  margin: 0;
+  font-size: 16px;
+}
+
+input,
+textarea,
+button {
+  width: 100%;
+  font: inherit;
+}
+
+button {
+  min-height: 32px;
+}
+
+#messages {
+  display: grid;
+  gap: 8px;
+  height: calc(100vh - 260px);
+  min-height: 220px;
+  overflow: auto;
+  padding: 10px;
+}
+
+article {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  background: white;
+}
+
+.user {
+  background: #eff6ff;
+}
+
+.assistant {
+  background: #ecfdf5;
+}
+
+.error {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+dialog {
+  width: min(92vw, 360px);
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

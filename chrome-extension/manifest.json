@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Autonomy",
+  "version": "0.1.0",
+  "description": "Chrome side panel UI for local Autonomy.",
+  "permissions": ["nativeMessaging", "sidePanel", "storage"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Autonomy"
+  }
+}

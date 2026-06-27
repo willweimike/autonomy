@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autonomy</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Autonomy</h1>
+      <button id="status">Status</button>
+    </header>
+    <section id="setup">
+      <input id="workspace" type="text" placeholder="/path/to/workspace" />
+      <input id="max-steps" type="number" min="1" value="12" />
+      <button id="start-session">Start</button>
+    </section>
+    <main id="messages" aria-live="polite"></main>
+    <section id="composer">
+      <textarea id="prompt" rows="4" placeholder="Ask Autonomy"></textarea>
+      <button id="send">Send</button>
+    </section>
+    <dialog id="approval-modal">
+      <form method="dialog">
+        <h2>Approval Required</h2>
+        <pre id="approval-message"></pre>
+        <button id="approval-deny" value="deny">Deny</button>
+        <button id="approval-allow" value="allow">Allow</button>
+      </form>
+    </dialog>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "com.autonomy.app",
+  "description": "Autonomy Chrome native messaging host",
+  "path": "/absolute/path/to/autonomy",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://EXTENSION_ID/"]
+}
