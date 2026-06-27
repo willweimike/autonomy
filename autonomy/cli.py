@@ -515,6 +515,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("chrome-host")
 
+    discord_bot = subparsers.add_parser("discord-bot")
+    discord_bot.add_argument("--workspace", type=Path, default=Path.cwd())
+    discord_bot.add_argument("--max-steps", type=int, default=12)
+
     run = subparsers.add_parser("run")
     run.add_argument("goal")
     run.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -871,6 +875,16 @@ def main(argv: list[str] | None = None) -> int:
         from . import chrome_host
 
         return chrome_host.run_chrome_host()
+    if args.command == "discord-bot":
+        from .discord_bot import run_discord_bot
+
+        workspace = args.workspace.resolve()
+        _prepare_workspace_storage(workspace)
+        return run_discord_bot(
+            workspace=workspace,
+            db_path=_db_path_for(workspace, args.db),
+            max_steps=args.max_steps,
+        )
     workspace = _workspace_for_args(args)
     _prepare_workspace_storage(workspace)
     db_path = _db_path_for(workspace, args.db)

@@ -34,3 +34,15 @@ def test_readme_documents_chrome_extension_native_host():
     assert "native-host.example.json" in text
     assert "com.autonomy.app" in text
     assert "host/session count only" in text
+
+
+def test_readme_documents_discord_dm_bot_optional_extra():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'discord = ["discord.py>=2,<3"]' in pyproject
+    assert "## Discord DM Bot" in readme
+    assert 'python -m pip install -e ".[discord]"' in readme
+    assert "DISCORD_BOT_TOKEN" in readme
+    assert "DISCORD_OWNER_ID" in readme
+    assert "autonomy discord-bot --workspace . --max-steps 12" in readme

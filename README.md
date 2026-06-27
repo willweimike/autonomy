@@ -163,6 +163,53 @@ The extension never receives provider API keys or `.autonomy/.env` content.
 Approval prompts default to deny on timeout or disconnect.
 The panel `status` action currently reports host/session count only; it does not expose model/tool status.
 
+## Discord DM Bot
+
+Autonomy can run as an owner-only Discord DM bot for mobile chat access.
+Discord is only a UI adapter:
+
+```text
+ConversationLoop(interface="discord") -> AgentLoop -> ActionGateway -> ToolRegistry
+```
+
+Install the optional Discord dependency:
+
+```bash
+python -m pip install -e ".[discord]"
+```
+
+Create a Discord application and bot in the Discord Developer Portal, enable
+Message Content Intent for the bot, then add the bot token and your Discord
+user id to the workspace secrets file:
+
+```text
+<workspace>/.autonomy/.env
+```
+
+```dotenv
+DISCORD_BOT_TOKEN="your-bot-token"
+DISCORD_OWNER_ID="123456789012345678"
+```
+
+Keep the file mode at `0600`. Start the bot from the workspace:
+
+```bash
+autonomy discord-bot --workspace . --max-steps 12
+```
+
+Only `DISCORD_OWNER_ID` can use the bot. Normal DM messages become Autonomy
+prompts. DM commands:
+
+```text
+!status
+!inspect RUN_ID
+!reset
+```
+
+Approval prompts are sent as Discord Allow/Deny buttons. Pending approvals
+default to deny on timeout or shutdown. The bot never sends provider API keys
+or `.autonomy/.env` content to Discord.
+
 ## Interactive Session
 
 `autonomy` and `autonomy tui` start the terminal UI. Natural language input now
