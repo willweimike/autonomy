@@ -56,3 +56,17 @@ Verification
 - `python3.13 -m pytest tests/test_autonomy_native_chrome_host.py::AutonomyNativeChromeApprovalTest -q` -> `2 passed`
 - `python3.13 -m pytest tests/test_autonomy_native_chrome_host.py -q` -> `17 passed`
 - `git diff --check` -> clean
+
+Remaining approval fixes
+- Reviewer issue 1: disconnect/EOF now denies pending approvals immediately instead of waiting for broker timeout.
+  - Added `ChromeApprovalBroker.deny_all(reason: str = "approval denied by disconnect")`.
+  - Added `ChromeSessionBridge.deny_pending_approvals(...)` as the minimal host seam.
+  - `run_chrome_host()` now calls `api.deny_pending_approvals()` on EOF before joining in-flight worker threads.
+- Reviewer issue 2: added a focused real-path regression that uses `ChromeSessionBridge.handle("approval.respond")` with the real `ChromeApprovalBroker.prompt/respond` flow.
+  - `test_chrome_host_bridge_allows_real_approval_round_trip` drives `session.start` -> `chat.send` -> `approval.requested` -> `approval.respond` -> `chat.result` across the native host loop.
+  - `test_chrome_host_disconnect_denies_pending_approval_immediately` proves the EOF path resolves the blocked approval quickly and returns a denied `chat.result`.
+
+Verification
+- `python3.13 -m pytest tests/test_autonomy_native_chrome_host.py::AutonomyNativeChromeApprovalTest -q` -> `4 passed`
+- `python3.13 -m pytest tests/test_autonomy_native_chrome_host.py -q` -> `19 passed`
+- `git diff --check` -> clean

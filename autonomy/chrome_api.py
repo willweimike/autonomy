@@ -66,6 +66,16 @@ class ChromeApprovalBroker:
             "decision": decision,
         }
 
+    def deny_all(self, reason: str = "approval denied by disconnect") -> int:
+        del reason
+        with self._condition:
+            pending_ids = [approval_id for approval_id, decision in self._pending.items() if decision is None]
+            for approval_id in pending_ids:
+                self._pending[approval_id] = False
+            if pending_ids:
+                self._condition.notify_all()
+            return len(pending_ids)
+
     @staticmethod
     def _redact(message: str) -> str:
         return message.replace(".autonomy/.env", ".autonomy/[redacted]")
@@ -193,6 +203,9 @@ class ChromeSessionBridge:
 
     def set_event_sink(self, sink: Callable[[dict[str, Any]], None] | None) -> None:
         self.event_sink = sink
+
+    def deny_pending_approvals(self, reason: str = "approval denied by disconnect") -> int:
+        return self.approval_broker.deny_all(reason)
 
     def _workspace_from(self, message: dict[str, Any]) -> Path:
         raw_workspace = message.get("workspace")

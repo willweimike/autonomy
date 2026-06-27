@@ -100,6 +100,8 @@ def run_chrome_host(
         try:
             message = read_native_message(input_stream)
             if message is None:
+                if hasattr(api, "deny_pending_approvals"):
+                    api.deny_pending_approvals()
                 for worker in workers:
                     worker.join()
                 return 0

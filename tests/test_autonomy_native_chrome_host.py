@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import struct
 import tempfile
 import threading
@@ -27,6 +28,17 @@ def decode_framed_messages(data: bytes) -> list[dict]:
         messages.append(json.loads(data[offset : offset + size].decode("utf-8")))
         offset += size
     return messages
+
+
+def read_framed_message(stream) -> dict:
+    header = stream.read(4)
+    if len(header) != 4:
+        raise EOFError("missing frame header")
+    size = struct.unpack("<I", header)[0]
+    body = stream.read(size)
+    if len(body) != size:
+        raise EOFError("truncated frame body")
+    return json.loads(body.decode("utf-8"))
 
 
 class AutonomyNativeChromeHostTest(unittest.TestCase):
@@ -237,6 +249,46 @@ class FakeStore:
         return {"run_id": run_id, "events": [{"event_type": "run_started"}]}
 
 
+class ApprovalConversation:
+    def __init__(
+        self,
+        *,
+        workspace,
+        db_path,
+        max_steps,
+        agent_loop_factory,
+        responder,
+        store=None,
+        session_id=None,
+        interface="tui",
+    ):
+        del responder, store, session_id, interface, max_steps
+        self.workspace = workspace
+        self.db_path = db_path
+        self.agent_loop = agent_loop_factory(workspace, db_path)
+
+    def handle_user_input(self, text):
+        allowed = self.agent_loop.action_gateway.approval.prompt(text)
+        run_result = RunResult(
+            run_id="run-approval",
+            goal=text,
+            termination=TerminationReason.ACHIEVED,
+            reason="allow" if allowed else "deny",
+            steps_executed=1,
+        )
+        return ConversationResponse(
+            session_id="session-approval",
+            user_turn_id="user-approval",
+            assistant_turn_id="assistant-approval",
+            run_result=run_result,
+            reply="approved" if allowed else "denied",
+            conversation_context="",
+            candidate_skills=(),
+            action_recipe_candidates=(),
+            decision=None,
+        )
+
+
 class AutonomyNativeChromeApiTest(unittest.TestCase):
     def test_chrome_api_starts_session_and_sends_chat(self):
         from autonomy.chrome_api import ChromeSessionBridge
@@ -342,3 +394,132 @@ class AutonomyNativeChromeApprovalTest(unittest.TestCase):
         broker.respond(events[-1]["approval_id"], "deny")
         thread.join(timeout=1.0)
         self.assertFalse(result["allowed"])
+
+    def test_chrome_host_bridge_allows_real_approval_round_trip(self):
+        from autonomy.chrome_api import ChromeSessionBridge
+        from autonomy.chrome_host import run_chrome_host
+
+        input_read_fd, input_write_fd = os.pipe()
+        output_read_fd, output_write_fd = os.pipe()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            os.fdopen(input_read_fd, "rb", buffering=0) as host_input,
+            os.fdopen(input_write_fd, "wb", buffering=0) as input_writer,
+            os.fdopen(output_read_fd, "rb", buffering=0) as output_reader,
+            os.fdopen(output_write_fd, "wb", buffering=0) as host_output,
+        ):
+            workspace = Path(tmpdir)
+            bridge = ChromeSessionBridge(
+                workspace=workspace,
+                conversation_factory=ApprovalConversation,
+                store_factory=FakeStore,
+            )
+            bridge.approval_broker.timeout_seconds = 5.0
+            host_thread = threading.Thread(
+                target=run_chrome_host,
+                kwargs={
+                    "input_stream": host_input,
+                    "output_stream": host_output,
+                    "api": bridge,
+                },
+            )
+
+            with patch("autonomy.chrome_api.build_agent_loop") as build_agent_loop:
+                build_agent_loop.return_value = type(
+                    "AgentLoop",
+                    (),
+                    {"action_gateway": type("Gateway", (), {"approval": None})()},
+                )()
+                host_thread.start()
+                input_writer.write(framed({"type": "session.start", "workspace": str(workspace)}))
+                session_started = read_framed_message(output_reader)
+                input_writer.write(
+                    framed(
+                        {
+                            "type": "chat.send",
+                            "session_id": session_started["session_id"],
+                            "text": "Approve high-risk action?",
+                        }
+                    )
+                )
+                approval_requested = read_framed_message(output_reader)
+                input_writer.write(
+                    framed(
+                        {
+                            "type": "approval.respond",
+                            "approval_id": approval_requested["approval_id"],
+                            "decision": "allow",
+                        }
+                    )
+                )
+                approval_result = read_framed_message(output_reader)
+                chat_result = read_framed_message(output_reader)
+                input_writer.close()
+                host_thread.join(timeout=1.0)
+
+        self.assertFalse(host_thread.is_alive())
+        self.assertEqual(session_started["type"], "session.started")
+        self.assertEqual(approval_requested["type"], "approval.requested")
+        self.assertEqual(approval_result["type"], "approval.result")
+        self.assertEqual(chat_result["type"], "chat.result")
+        self.assertEqual(chat_result["reason"], "allow")
+        self.assertEqual(chat_result["reply"], "approved")
+
+    def test_chrome_host_disconnect_denies_pending_approval_immediately(self):
+        from autonomy.chrome_api import ChromeSessionBridge
+        from autonomy.chrome_host import run_chrome_host
+
+        input_read_fd, input_write_fd = os.pipe()
+        output_read_fd, output_write_fd = os.pipe()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            os.fdopen(input_read_fd, "rb", buffering=0) as host_input,
+            os.fdopen(input_write_fd, "wb", buffering=0) as input_writer,
+            os.fdopen(output_read_fd, "rb", buffering=0) as output_reader,
+            os.fdopen(output_write_fd, "wb", buffering=0) as host_output,
+        ):
+            workspace = Path(tmpdir)
+            bridge = ChromeSessionBridge(
+                workspace=workspace,
+                conversation_factory=ApprovalConversation,
+                store_factory=FakeStore,
+            )
+            bridge.approval_broker.timeout_seconds = 30.0
+            host_thread = threading.Thread(
+                target=run_chrome_host,
+                kwargs={
+                    "input_stream": host_input,
+                    "output_stream": host_output,
+                    "api": bridge,
+                },
+            )
+
+            with patch("autonomy.chrome_api.build_agent_loop") as build_agent_loop:
+                build_agent_loop.return_value = type(
+                    "AgentLoop",
+                    (),
+                    {"action_gateway": type("Gateway", (), {"approval": None})()},
+                )()
+                host_thread.start()
+                input_writer.write(framed({"type": "session.start", "workspace": str(workspace)}))
+                session_started = read_framed_message(output_reader)
+                input_writer.write(
+                    framed(
+                        {
+                            "type": "chat.send",
+                            "session_id": session_started["session_id"],
+                            "text": "Approve disconnect path?",
+                        }
+                    )
+                )
+                approval_requested = read_framed_message(output_reader)
+                start = time.monotonic()
+                input_writer.close()
+                chat_result = read_framed_message(output_reader)
+                host_thread.join(timeout=1.0)
+
+        self.assertFalse(host_thread.is_alive())
+        self.assertEqual(approval_requested["type"], "approval.requested")
+        self.assertEqual(chat_result["type"], "chat.result")
+        self.assertEqual(chat_result["reason"], "deny")
+        self.assertLess(time.monotonic() - start, 1.0)
