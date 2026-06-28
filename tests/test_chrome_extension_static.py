@@ -34,9 +34,18 @@ class ChromeExtensionStaticTest(unittest.TestCase):
         ):
             self.assertIn(message_type, service_worker + sidepanel)
         self.assertIn('id="workspace"', html)
+        self.assertIn('id="max-steps"', html)
+        self.assertIn('id="start-session"', html)
+        self.assertIn('id="status"', html)
+        self.assertIn('id="prompt"', html)
+        self.assertIn('id="send"', html)
         self.assertIn('id="run-id"', html)
         self.assertIn('id="inspect-run"', html)
         self.assertIn('id="approval-modal"', html)
+        self.assertIn('id="session-status"', html)
+        self.assertIn('id="empty-state"', html)
+        self.assertIn('id="busy-indicator"', html)
+        self.assertIn('id="run-metadata"', html)
         self.assertRegex(sidepanel, r"lastRunId\s*=\s*message\.run_id")
         match = re.search(
             r'document\.getElementById\("inspect-run"\)\.addEventListener\("click",\s*\(\)\s*=>\s*\{(?P<body>.*?)\n\}\);',
@@ -50,6 +59,34 @@ class ChromeExtensionStaticTest(unittest.TestCase):
         self.assertIn("run_id", body)
         self.assertIn("active sessions", sidepanel)
         self.assertIn("not model/tool status", sidepanel)
+        self.assertIn("nativeConnected", sidepanel)
+        self.assertIn("busy", sidepanel)
+        self.assertIn("chrome.storage.local", sidepanel)
+        self.assertIn("updateControls", sidepanel)
+        self.assertIn("keydown", sidepanel)
+        self.assertIn("Shift", sidepanel)
+        self.assertIn("steps_executed", sidepanel)
+
+    def test_sidepanel_css_declares_chat_console_layout(self):
+        css = (EXTENSION / "sidepanel.css").read_text(encoding="utf-8")
+
+        for selector in (
+            ".app-shell",
+            ".topbar",
+            ".setup-bar",
+            ".transcript",
+            ".composer",
+            ".message",
+            ".metadata-chip",
+            ".status-pill",
+            ".empty-state",
+            ".busy-indicator",
+        ):
+            self.assertIn(selector, css)
+        self.assertIn("height: 100vh", css)
+        self.assertIn("overflow-y: auto", css)
+        self.assertIn(":focus-visible", css)
+        self.assertIn("@media", css)
 
     def test_native_host_example_restricts_extension_origin(self):
         manifest = json.loads((EXTENSION / "native-host.example.json").read_text(encoding="utf-8"))

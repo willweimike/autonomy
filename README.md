@@ -210,6 +210,52 @@ Approval prompts are sent as Discord Allow/Deny buttons. Pending approvals
 default to deny on timeout or shutdown. The bot never sends provider API keys
 or `.autonomy/.env` content to Discord.
 
+## Telegram DM Bot
+
+Autonomy can also run as an owner-only Telegram private chat bot. Telegram is
+only a UI adapter:
+
+```text
+ConversationLoop(interface="telegram") -> AgentLoop -> ActionGateway -> ToolRegistry
+```
+
+Install the optional Telegram dependency:
+
+```bash
+python -m pip install -e ".[telegram]"
+```
+
+Create a bot with BotFather, then add the bot token and your Telegram user id
+to the workspace secrets file:
+
+```text
+<workspace>/.autonomy/.env
+```
+
+```dotenv
+TELEGRAM_BOT_TOKEN="your-bot-token"
+TELEGRAM_OWNER_ID="123456789"
+```
+
+Keep the file mode at `0600`. Start the polling bot from the workspace:
+
+```bash
+autonomy telegram-bot --workspace . --max-steps 12
+```
+
+Only `TELEGRAM_OWNER_ID` can use the bot. v1 ignores group and channel
+messages; use a private chat with the bot. Commands:
+
+```text
+/status
+/inspect RUN_ID
+/reset
+```
+
+Approval prompts are sent as Telegram inline Allow/Deny buttons. Pending
+approvals default to deny on timeout or shutdown. The bot never sends provider
+API keys or `.autonomy/.env` content to Telegram.
+
 ## Interactive Session
 
 `autonomy` and `autonomy tui` start the terminal UI. Natural language input now
@@ -371,6 +417,8 @@ the agent loop.
 Enabling a toolset only controls which implemented and available tools are
 visible to planning; it does not grant extra permissions or bypass
 `ActionGateway`.
+Explicit subagent requests expose `delegate.run`; otherwise the delegate toolset
+stays hidden from planning even when enabled.
 
 Configure databases for the `database.retrieve` tool in:
 

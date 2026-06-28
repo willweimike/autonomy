@@ -4,7 +4,7 @@ import json
 import uuid
 
 from .action_gateway import ActionGateway
-from .delegation import AgentExecutionContext
+from .delegation import AgentExecutionContext, subagents_allowed_for
 from .learning import LearningLoop
 from .model import CandidateModel
 from .models import (
@@ -132,6 +132,7 @@ class AgentLoop:
             max_steps=max_steps,
             conversation_context="\n\n".join(context_parts),
             project_context=self.project_context.content if self.project_context else "",
+            subagents_allowed=subagents_allowed_for(goal, interface),
         )
         self.store.create_run(state.run_id, state.goal.text)
         model_context = getattr(self.model, "journal_context", {})
@@ -142,6 +143,7 @@ class AgentLoop:
             {
                 "goal": state.goal.text,
                 "interface": interface.strip(),
+                "subagents_allowed": state.subagents_allowed,
                 **model_context,
                 **(journal_metadata or {}),
             },
@@ -276,8 +278,9 @@ class AgentLoop:
         return None
 
     def disclose_procedure_skills(self, state: RunState) -> list[ProcedureSkill]:
+        available_tools = self.planning_tool_names(state)
         considered_skills: list[ProcedureSkillSummary] = (
-            self.procedure_skills.index(self.tools.names)
+            self.procedure_skills.index(available_tools)
             if self.procedure_skills
             else []
         )
@@ -291,7 +294,7 @@ class AgentLoop:
             self.model.select_procedure_skills(
                 state,
                 considered_skills,
-                self.tools.names,
+                available_tools,
             )
             if considered_skills
             else []
@@ -305,7 +308,7 @@ class AgentLoop:
         loaded_skills = (
             self.procedure_skills.load_selected(
                 selected_skill_names,
-                self.tools.names,
+                available_tools,
             )
             if self.procedure_skills
             else []
@@ -323,12 +326,13 @@ class AgentLoop:
         state: RunState,
         loaded_skills: list[ProcedureSkill],
     ) -> list[CandidatePath]:
+        available_tools = self.planning_tool_names(state)
         candidates = [
             *self.model.propose(
                 state,
-                self.tools.names,
+                available_tools,
                 loaded_skills,
-                tool_specs=self.tools.model_specs(),
+                tool_specs=self.planning_tool_specs(available_tools),
             ),
             *self.recipes.candidates_for(state),
         ]
@@ -340,6 +344,7 @@ class AgentLoop:
         state: RunState,
         candidates: list[CandidatePath],
     ) -> list[CandidatePath]:
+        available_tools = self.planning_tool_names(state)
         completed_action_fingerprints = {
             transition.action.fingerprint
             for transition in state.transitions
@@ -353,13 +358,18 @@ class AgentLoop:
             failed_action_counts[fingerprint] = failed_action_counts.get(fingerprint, 0) + 1
         ranked = self.selector.select(
             candidates,
-            self.tools.names,
+            available_tools,
             completed_action_fingerprints,
             failed_action_counts,
             self.tools.rejection_reason,
             self.action_gateway.risk_for_intent,
             self.action_gateway.side_effects_for_intent,
         )
+        ranked = [
+            candidate
+            for candidate in ranked
+            if all(action.tool in available_tools for action in candidate.actions)
+        ]
         self.store.record_event(
             state.run_id,
             state.step,
@@ -378,6 +388,22 @@ class AgentLoop:
         )
         self.store.record_event(state.run_id, state.step, "candidates_ranked", ranked)
         return ranked
+
+    def planning_tool_names(self, state: RunState) -> set[str]:
+        if state.subagents_allowed:
+            return set(self.tools.names)
+        return {
+            name
+            for name in self.tools.names
+            if self.tools.spec(name).toolset != "delegate"
+        }
+
+    def planning_tool_specs(self, available_tools: set[str]) -> list[dict]:
+        return [
+            spec
+            for spec in self.tools.model_specs()
+            if spec["name"] in available_tools
+        ]
 
     def evaluate_outcome(
         self,

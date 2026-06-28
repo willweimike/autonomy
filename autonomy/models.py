@@ -160,6 +160,7 @@ class RunState:
     current_state: str = "No actions have been executed."
     conversation_context: str = ""
     project_context: str = ""
+    subagents_allowed: bool = False
 
 
 @dataclass(frozen=True)

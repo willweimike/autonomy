@@ -7,30 +7,61 @@
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
-    <header>
-      <h1>Autonomy</h1>
-      <button id="status">Status</button>
-    </header>
-    <section id="setup">
-      <input id="workspace" type="text" placeholder="/path/to/workspace" />
-      <input id="max-steps" type="number" min="1" value="12" />
-      <button id="start-session">Start</button>
-      <input id="run-id" type="text" placeholder="run-id for inspect" />
-      <button id="inspect-run">Inspect</button>
-    </section>
-    <main id="messages" aria-live="polite"></main>
-    <section id="composer">
-      <textarea id="prompt" rows="4" placeholder="Ask Autonomy"></textarea>
-      <button id="send">Send</button>
-    </section>
-    <dialog id="approval-modal">
-      <form method="dialog">
-        <h2>Approval Required</h2>
-        <pre id="approval-message"></pre>
-        <button id="approval-deny" value="deny">Deny</button>
-        <button id="approval-allow" value="allow">Allow</button>
-      </form>
-    </dialog>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1>Autonomy</h1>
+          <p>Chrome console</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="session-status" class="status-pill disconnected">Disconnected</span>
+          <button id="status" class="secondary" type="button">Status</button>
+        </div>
+      </header>
+
+      <section id="setup" class="setup-bar" aria-label="Session setup">
+        <label>
+          <span>Workspace</span>
+          <input id="workspace" type="text" placeholder="/path/to/workspace" autocomplete="off" />
+        </label>
+        <label class="steps-field">
+          <span>Steps</span>
+          <input id="max-steps" type="number" min="1" value="12" />
+        </label>
+        <button id="start-session" type="button">Start</button>
+        <label class="run-field">
+          <span>Run</span>
+          <input id="run-id" type="text" placeholder="run-id" autocomplete="off" />
+        </label>
+        <button id="inspect-run" class="secondary" type="button">Inspect</button>
+      </section>
+
+      <main id="messages" class="transcript" aria-live="polite">
+        <section id="empty-state" class="empty-state">
+          <strong>No messages yet</strong>
+          <span>Start a session, then send a prompt to Autonomy.</span>
+        </section>
+      </main>
+
+      <section id="run-metadata" class="run-metadata" aria-live="polite"></section>
+
+      <section id="composer" class="composer" aria-label="Message composer">
+        <div id="busy-indicator" class="busy-indicator" hidden>Session is running...</div>
+        <textarea id="prompt" rows="3" placeholder="Ask Autonomy"></textarea>
+        <button id="send" type="button" disabled>Send</button>
+      </section>
+
+      <dialog id="approval-modal">
+        <form method="dialog" class="approval-panel">
+          <h2>Approval Required</h2>
+          <pre id="approval-message"></pre>
+          <div class="approval-actions">
+            <button id="approval-deny" class="danger" type="button" value="deny">Deny</button>
+            <button id="approval-allow" type="button" value="allow">Allow</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
     <script src="sidepanel.js"></script>
   </body>
 </html>

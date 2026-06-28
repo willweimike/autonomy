@@ -242,7 +242,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         loop = self.agent_loop(model)
         loop_ref["loop"] = loop
 
-        result = loop.run("parent task", max_steps=2, interactive=False)
+        result = loop.run("parent task; use subagent", max_steps=2, interactive=False)
 
         parent_journal = self.store.inspect_run(result.run_id)
         delegate_observation = next(
@@ -261,6 +261,37 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         self.assertEqual(child_started["parent_step"], 1)
         self.assertEqual(child_started["delegate_goal"], "child task")
         self.assertEqual(child_started["max_steps"], 2)
+
+    def test_delegate_run_is_hidden_until_user_explicitly_requests_subagents(self):
+        from autonomy.tools.toolsets.delegate import register_delegate_tools
+
+        loop_ref = {}
+        register_delegate_tools(
+            self.registry,
+            lambda goal, max_steps, context: loop_ref["loop"].delegate_child(goal, max_steps, context),
+        )
+        model = CapturingSequenceModel(
+            [
+                [
+                    candidate(
+                        tool="delegate.run",
+                        arguments={"goal": "child task"},
+                        purpose="delegate child task",
+                    )
+                ],
+            ]
+        )
+        loop = self.agent_loop(model)
+        loop_ref["loop"] = loop
+
+        result = loop.run("parent task", max_steps=1, interactive=False)
+
+        self.assertEqual(result.termination, TerminationReason.NO_CANDIDATES)
+        self.assertNotIn("delegate.run", model.available_tools_by_call[0])
+        journal = self.store.inspect_run(result.run_id)
+        self.assertFalse(
+            any(event["event_type"] == "observation" for event in journal["events"])
+        )
 
     def test_delegate_child_failure_returns_failed_observation(self):
         from autonomy.tools.toolsets.delegate import register_delegate_tools
@@ -284,7 +315,7 @@ class AutonomyNativeAgentLoopTest(unittest.TestCase):
         loop = self.agent_loop(model)
         loop_ref["loop"] = loop
 
-        result = loop.run("parent task", max_steps=1, interactive=False)
+        result = loop.run("parent task; use subagent", max_steps=1, interactive=False)
 
         parent_journal = self.store.inspect_run(result.run_id)
         delegate_observation = next(

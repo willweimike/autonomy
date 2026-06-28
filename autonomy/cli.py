@@ -528,7 +528,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     discord_bot = subparsers.add_parser("discord-bot")
     discord_bot.add_argument("--workspace", type=Path, default=Path.cwd())
+    discord_bot.add_argument("--db", type=Path, default=None)
     discord_bot.add_argument("--max-steps", type=int, default=12)
+
+    telegram_bot = subparsers.add_parser("telegram-bot")
+    telegram_bot.add_argument("--workspace", type=Path, default=Path.cwd())
+    telegram_bot.add_argument("--db", type=Path, default=None)
+    telegram_bot.add_argument("--max-steps", type=int, default=12)
 
     run = subparsers.add_parser("run")
     run.add_argument("goal")
@@ -892,6 +898,16 @@ def main(argv: list[str] | None = None) -> int:
         workspace = args.workspace.resolve()
         _prepare_workspace_storage(workspace)
         return run_discord_bot(
+            workspace=workspace,
+            db_path=_db_path_for(workspace, args.db),
+            max_steps=args.max_steps,
+        )
+    if args.command == "telegram-bot":
+        from .telegram_bot import run_telegram_bot
+
+        workspace = args.workspace.resolve()
+        _prepare_workspace_storage(workspace)
+        return run_telegram_bot(
             workspace=workspace,
             db_path=_db_path_for(workspace, args.db),
             max_steps=args.max_steps,
