@@ -126,6 +126,53 @@ python3.13 -m autonomy skills reject CANDIDATE_ID
 python3.13 -m autonomy skills disable SKILL_NAME
 ```
 
+## Running Autonomy inside Docker Sandboxes
+
+Autonomy supports running inside Docker Sandboxes.
+
+Docker Sandboxes is the recommended sandbox deployment for Autonomy when you
+want the whole agent process isolated in a microVM. Autonomy does not change
+its runtime path inside the sandbox:
+
+```text
+Docker Sandboxes microVM
+  -> Autonomy process
+    -> ConversationLoop
+      -> AgentLoop
+        -> ActionGateway
+          -> ToolRegistry
+```
+
+Install and enter a Docker Sandbox, then install and run Autonomy inside that
+environment:
+
+```bash
+brew trust docker/tap
+brew install docker/tap/sbx
+sbx login
+sbx run shell .
+python3.13 -m pip install -e .
+autonomy doctor
+autonomy tui
+```
+
+The same Autonomy surfaces can run inside the sandbox: `autonomy run`,
+`autonomy tui`, Discord bot, Telegram bot, MCP tools, and terminal tools.
+Provider credentials should be configured from inside the sandbox workspace
+with `autonomy model setup`, so secrets stay scoped to that workspace.
+
+Discord, Telegram, model providers, and external MCP servers need the Docker
+Sandboxes network policy to allow their endpoints. Chrome extension Native
+Messaging host is launched by host Chrome, so it does not automatically run
+inside the Docker Sandbox; full Chrome extension isolation needs a host wrapper
+later.
+
+v1 does not provide `.autonomy/sandbox.yaml`, v1 does not implement
+`backend: sbx`, and Autonomy does not create, manage, or auto-generate Docker
+Sandboxes sessions or policies. A future embedded `backend: sbx` needs separate
+validation for stdout, stderr, exit code, timeout, and long-running process
+lifecycle behavior.
+
 ## Chrome Extension UI
 
 Autonomy includes a local Chrome side panel UI for development.

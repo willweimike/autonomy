@@ -67,3 +67,18 @@ def test_readme_documents_delegate_toolset_as_implemented():
     assert "autonomy tools enable delegate" in readme
     assert "Explicit subagent requests expose `delegate.run`" in readme
     assert "planned Hermes-like toolsets such as\n`cronjob`" in readme
+
+
+def test_readme_documents_docker_sandboxes_deployment_support():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(readme.split())
+
+    assert "## Running Autonomy inside Docker Sandboxes" in readme
+    assert "Autonomy supports running inside Docker Sandboxes." in readme
+    assert "sbx login" in readme
+    assert "sbx run shell ." in readme
+    assert "python3.13 -m pip install -e ." in readme
+    assert "autonomy doctor" in readme
+    assert "Chrome extension Native Messaging host is launched by host Chrome" in normalized
+    assert "v1 does not provide `.autonomy/sandbox.yaml`" in normalized
+    assert "v1 does not implement `backend: sbx`" in normalized
